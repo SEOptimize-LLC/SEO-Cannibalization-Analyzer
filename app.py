@@ -1,3 +1,4 @@
+"""
 SEO Cannibalization Analysis App
 Improved version with URL normalization, click-based prioritization, and enhanced SERP analysis
 """
