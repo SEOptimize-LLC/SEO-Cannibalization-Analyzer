@@ -1858,14 +1858,14 @@ def display_ai_recommendations(recommendations: Dict):
                 st.write("• Monitor & adjust")
     
     # Download recommendations
-    if st.button("📥 Download AI Recommendations Report", use_container_width=True):
-        report_text = generate_recommendations_report(recommendations)
-        st.download_button(
-            label="Download Recommendations Report (Markdown)",
-            data=report_text,
-            file_name=f"ai_recommendations_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
-            mime="text/markdown"
-        )
+    report_text = generate_recommendations_report(recommendations)
+    st.download_button(
+        label="📥 Download AI Recommendations Report (Markdown)",
+        data=report_text,
+        file_name=f"ai_recommendations_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
+        mime="text/markdown",
+        use_container_width=True
+    )
 
 def generate_recommendations_report(recommendations: Dict) -> str:
     """Generate a downloadable recommendations report"""
@@ -2212,14 +2212,15 @@ def main():
                     
                     # Download button for keyword report
                     st.divider()
-                    if st.button("📥 Download Keyword Analysis Report", use_container_width=True, key="download_keyword"):
-                        report = generate_keyword_report(results)
-                        st.download_button(
-                            label="Download Report (Markdown)",
-                            data=report,
-                            file_name=f"keyword_cannibalization_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
-                            mime="text/markdown"
-                        )
+                    report = generate_keyword_report(results)
+                    st.download_button(
+                        label="📥 Download Keyword Analysis Report (Markdown)",
+                        data=report,
+                        file_name=f"keyword_cannibalization_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
+                        mime="text/markdown",
+                        use_container_width=True,
+                        key="download_keyword"
+                    )
         else:
             st.info("📤 Please upload a GSC report in the Data Upload tab")
     
@@ -2396,14 +2397,15 @@ def main():
                                 
                                 # Download button for content report
                                 st.divider()
-                                if st.button("📥 Download Content Analysis Report", use_container_width=True, key="download_content"):
-                                    report = generate_content_report(results)
-                                    st.download_button(
-                                        label="Download Report (Markdown)",
-                                        data=report,
-                                        file_name=f"content_cannibalization_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
-                                        mime="text/markdown"
-                                    )
+                                report = generate_content_report(results)
+                                st.download_button(
+                                    label="📥 Download Content Analysis Report (Markdown)",
+                                    data=report,
+                                    file_name=f"content_cannibalization_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
+                                    mime="text/markdown",
+                                    use_container_width=True,
+                                    key="download_content"
+                                )
                             else:
                                 st.error(f"❌ {results.get('error', 'Unknown error')}")
                                 
@@ -2489,14 +2491,15 @@ def main():
                         
                         # Download button for topic report
                         st.divider()
-                        if st.button("📥 Download Topic Analysis Report", use_container_width=True, key="download_topic"):
-                            report = generate_topic_report(results)
-                            st.download_button(
-                                label="Download Report (Markdown)",
-                                data=report,
-                                file_name=f"topic_cannibalization_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
-                                mime="text/markdown"
-                            )
+                        report = generate_topic_report(results)
+                        st.download_button(
+                            label="📥 Download Topic Analysis Report (Markdown)",
+                            data=report,
+                            file_name=f"topic_cannibalization_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
+                            mime="text/markdown",
+                            use_container_width=True,
+                            key="download_topic"
+                        )
                     else:
                         st.error(f"❌ {results.get('error', 'Unknown error')}")
         else:
@@ -2606,25 +2609,25 @@ def main():
                 st.info("💡 Don't forget to check the **AI Insights & Recommendations** tab for actionable fixes!")
             
             # Comprehensive report download
-            if st.button("📋 Download Complete Analysis Report", type="primary", use_container_width=True):
-                with st.spinner("Generating comprehensive report..."):
-                    # Include AI recommendations if available
-                    ai_recommendations = st.session_state.get('ai_recommendations', {})
-                    
-                    report = generate_comprehensive_report(
-                        st.session_state.get('keyword_results', {}),
-                        st.session_state.get('content_results', {}),
-                        st.session_state.get('topic_results', {}),
-                        ai_provider,
-                        ai_recommendations
-                    )
-                    
-                    st.download_button(
-                        label="Download Complete Report (Markdown)",
-                        data=report,
-                        file_name=f"seo_cannibalization_complete_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
-                        mime="text/markdown"
-                    )
+            # Include AI recommendations if available
+            ai_recommendations = st.session_state.get('ai_recommendations', {})
+            
+            report = generate_comprehensive_report(
+                st.session_state.get('keyword_results', {}),
+                st.session_state.get('content_results', {}),
+                st.session_state.get('topic_results', {}),
+                ai_provider,
+                ai_recommendations
+            )
+            
+            st.download_button(
+                label="📋 Download Complete Analysis Report (Markdown)",
+                data=report,
+                file_name=f"seo_cannibalization_complete_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
+                mime="text/markdown",
+                type="primary",
+                use_container_width=True
+            )
     else:
         st.info("📊 Run at least one analysis to generate insights")
 
