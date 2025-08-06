@@ -1,4 +1,66 @@
-"""
+if not serp_data:
+            return {"error": "No SERP data retrieved. Check your API key and queries."}
+        
+        # Calculate overlap with progress tracking
+        overlap_matrix = {}
+        query_metrics = {}
+        queries_with_issues = set()
+        same_url_skipped = 0
+        
+        serp_items = list(serp_data.items())
+        total_comparisons = len(serp_items) * (len(serp_items) - 1) // 2
+        comparison_count = 0
+        
+        # Limit comparisons for large datasets
+        max_comparisons = 10000  # Prevent hanging on large datasets
+        
+        for i in range(len(serp_items)):
+            for j in range(i + 1, len(serp_items)):
+                if comparison_count >= max_comparisons:
+                    break
+                    
+                query1, serp1 = serp_items[i]
+                query2, serp2 = serp_items[j]
+                
+                # Quick skip if no overlap possible
+                if not set(serp1).intersection(set(serp2)):
+                    comparison_count += 1
+                    continue
+                
+                # Check if both queries come from the same URL
+                query1_urls = set(queries_df[queries_df['Query'] == query1]['Landing Page'].unique())
+                query2_urls = set(queries_df[queries_df['Query'] == query2]['Landing Page'].unique())
+                
+                # Skip if both queries are from the same URL(s)
+                if query1_urls == query2_urls and len(query1_urls) == 1:
+                    same_url_skipped += 1
+                    comparison_count += 1
+                    continue
+                
+                overlap = set(serp1).intersection(set(serp2))
+                union = set(serp1).union(set(serp2))
+                overlap_pct = (len(overlap) / len(union)) * 100 if union else 0
+                
+                if overlap_pct > 65:  # Only process significant overlaps
+                    queries_with_issues.add(query1)
+                    queries_with_issues.add(query2)
+                    
+                    key = f"{query1}||{query2}"
+                    
+                    # Get click data for both queries
+                    q1_clicks = query_clicks.get(query1, 0)
+                    q2_clicks = query_clicks.get(query2, 0)
+                    
+                    # Calculate position-weighted score
+                    position_score = 0
+                    if query1 in detailed_results and query2 in detailed_results:
+                        for domain in overlap:
+                            if domain in serp1 and domain in serp2:
+                                pos1 = serp1.index(domain) + 1
+                                pos2 = serp2.index(domain) + 1
+                                position_score += (11 - pos1) * (11 - pos2) / 100
+                    
+                    # Only buil"""
 SEO Cannibalization Analysis App
 Improved version with URL normalization, click-based prioritization, and enhanced SERP analysis
 """
@@ -18,6 +80,7 @@ import ast
 from typing import Dict, List, Tuple, Optional
 import time
 import io
+import re
 import re
 
 # AI Provider Imports (optional)
@@ -85,6 +148,112 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ============================================================================
+# INDIVIDUAL REPORT GENERATION FUNCTIONS
+# ============================================================================
+
+def generate_keyword_report(results: Dict) -> str:
+    """Generate keyword cannibalization report"""
+    report = f"""# Keyword Cannibalization Report
+Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+## Summary
+- **Total Pages Analyzed:** {results.get('total_pages_analyzed', 0)}
+- **Pages with Cannibalization:** {results.get('pages_with_cannibalization', 0)}
+- **Total Overlap Pairs:** {results.get('total_overlap_pairs', 0)}
+- **Average Overlap:** {results.get('average_overlap', 0):.1f}%
+- **Total Clicks Affected:** {results.get('total_clicks_affected', 0):,}
+- **Severity:** {results.get('severity_info', {}).get('severity', 'N/A')}
+
+## Top Cannibalization Issues
+"""
+    
+    for i, (pages, data) in enumerate(list(results.get('top_issues', {}).items())[:20], 1):
+        report += f"""
+### Issue #{i}
+- **Overlap:** {data['overlap_percentage']}%
+- **Clicks Affected:** {data['total_clicks_affected']:,}
+- **Shared Keywords:** {data['total_shared']}
+- **Page 1:** {data.get('page1_full', '')}
+- **Page 2:** {data.get('page2_full', '')}
+
+**Top Shared Keywords:**
+{', '.join(data.get('shared_keywords', [])[:10])}
+
+---
+"""
+    
+    return report
+
+def generate_content_report(results: Dict) -> str:
+    """Generate content/SERP cannibalization report"""
+    threshold = results.get('overlap_threshold', 65)
+    report = f"""# Content/SERP Cannibalization Report
+Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+## Summary
+- **Queries Analyzed:** {results.get('total_queries_analyzed', 0)}
+- **Queries with Overlap (≥{threshold}%):** {results.get('queries_with_overlap', 0)}
+- **Average SERP Overlap:** {results.get('average_overlap', 0):.1f}%
+- **API Credits Used:** {results.get('api_credits_used', 0)}
+- **Same URL Pairs Skipped:** {results.get('same_url_pairs_skipped', 0)}
+- **Comparisons Skipped (below threshold):** {results.get('comparisons_skipped', 0):,}
+- **Severity:** {results.get('severity_info', {}).get('severity', 'N/A')}
+
+## Top SERP Overlaps
+"""
+    
+    for i, (query_pair, data) in enumerate(list(results.get('top_overlaps', {}).items())[:20], 1):
+        report += f"""
+### Overlap #{i}
+- **SERP Overlap:** {data['overlap_percentage']}%
+- **Query 1:** {data.get('query1', '')} ({data.get('query1_clicks', 0):,} clicks)
+- **Query 2:** {data.get('query2', '')} ({data.get('query2_clicks', 0):,} clicks)
+- **Total Clicks:** {data.get('total_clicks', 0):,}
+- **Competition Level:** {data.get('competition_level', '')}
+- **Position Score:** {data.get('position_weighted_score', 0)}
+
+**Client URLs:**
+- Query 1 URL: {data.get('query1_client_urls', ['N/A'])[0] if data.get('query1_client_urls') else 'N/A'}
+- Query 2 URL: {data.get('query2_client_urls', ['N/A'])[0] if data.get('query2_client_urls') else 'N/A'}
+
+**Action:** {"Same search intent - consolidate content" if data['overlap_percentage'] >= threshold else "Monitor and differentiate"}
+
+---
+"""
+    
+    return report
+
+def generate_topic_report(results: Dict) -> str:
+    """Generate topic/semantic cannibalization report"""
+    report = f"""# Topic/Semantic Cannibalization Report
+Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+## Summary
+- **Total Pages Analyzed:** {results.get('total_pages', 0)}
+- **Pages with High Similarity:** {results.get('pages_with_high_similarity', 0)}
+- **Total Similarity Pairs:** {results.get('total_similarity_pairs', 0)}
+- **Average Similarity:** {results.get('average_similarity', 0):.3f}
+- **Embedding Dimension:** {results.get('embedding_dimension', 0)}
+- **Severity:** {results.get('severity_info', {}).get('severity', 'N/A')}
+
+## High Similarity Pairs
+"""
+    
+    for i, pair in enumerate(results.get('high_similarity_pairs', [])[:20], 1):
+        similarity_pct = pair['similarity'] * 100
+        report += f"""
+### Pair #{i}
+- **Similarity:** {similarity_pct:.1f}%
+- **Page 1:** {pair['page1']}
+- **Page 2:** {pair['page2']}
+- **Action Needed:** {"Merge immediately" if pair['similarity'] > 0.95 else "Consolidate content" if pair['similarity'] > 0.9 else "Differentiate content"}
+
+---
+"""
+    
+    return report
+
+# ============================================================================
 # URL NORMALIZATION AND PAGE TYPE DETECTION FUNCTIONS
 # ============================================================================
 
@@ -143,7 +312,7 @@ def normalize_url(url: str) -> str:
         
         # Remove common tracking parameters that don't affect content
         tracking_params = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 
-                           'utm_content', 'fbclid', 'gclid', 'msclkid', '_ga']
+                          'utm_content', 'fbclid', 'gclid', 'msclkid', '_ga']
         for param in tracking_params:
             query_params.pop(param, None)
         
@@ -244,7 +413,7 @@ def calculate_severity(pages_affected: int, overlap_percentage: float, issue_typ
             color = "🟢"
     
     elif issue_type == "content":
-        if overlap_percentage > 65: # Updated threshold per user request
+        if overlap_percentage > 65:  # Updated threshold per user request
             severity = "CRITICAL"
             impact = "Severe SERP competition"
             priority = "Immediate content differentiation needed"
@@ -265,7 +434,7 @@ def calculate_severity(pages_affected: int, overlap_percentage: float, issue_typ
             priority = "Monitor performance"
             color = "🟢"
     
-    else: # topic
+    else:  # topic
         if pages_affected > 10 or overlap_percentage > 0.9:
             severity = "CRITICAL"
             impact = "Severe topic dilution"
@@ -343,9 +512,10 @@ KEYWORD CANNIBALIZATION DATA:
 
 CONTENT/SERP CANNIBALIZATION DATA:
 - Queries analyzed: {content_data.get('total_queries_analyzed', 0)}
-- Queries with overlap: {content_data.get('queries_with_overlap', 0)}
+- Queries with overlap (≥{content_data.get('overlap_threshold', 65)}%): {content_data.get('queries_with_overlap', 0)}
 - Average SERP overlap: {content_data.get('average_overlap', 0):.1f}%
 - Same URL pairs correctly skipped: {content_data.get('same_url_pairs_skipped', 0)}
+- Comparisons skipped (below threshold): {content_data.get('comparisons_skipped', 0)}
 
 TOPIC CANNIBALIZATION DATA:
 - Pages analyzed: {topic_data.get('total_pages', 0)}
@@ -418,14 +588,14 @@ class KeywordCannibalizationAnalyzer:
         df_agg = df_clean.groupby(['Normalized_URL', 'Query']).agg({
             'Clicks': 'sum',
             'Impressions': 'sum',
-            'Landing Page': 'first' # Keep original URL for display
+            'Landing Page': 'first'  # Keep original URL for display
         }).reset_index()
         
         # Filter by minimum clicks if specified
         if min_clicks > 0:
             df_filtered = df_agg[df_agg['Clicks'] >= min_clicks]
             if df_filtered.empty:
-                df_filtered = df_agg # Fall back to all data if no keywords meet criteria
+                df_filtered = df_agg  # Fall back to all data if no keywords meet criteria
         else:
             df_filtered = df_agg
         
@@ -498,8 +668,8 @@ class KeywordCannibalizationAnalyzer:
         
         # Sort by total clicks affected (prioritize high-traffic overlaps)
         top_issues = sorted(overlap_details.items(), 
-                            key=lambda x: x[1]['total_clicks_affected'], 
-                            reverse=True)[:15]
+                          key=lambda x: x[1]['total_clicks_affected'], 
+                          reverse=True)[:15]
         
         # Calculate severity
         avg_overlap = np.mean([d['overlap_percentage'] for d in overlap_details.values()]) if overlap_details else 0
@@ -573,7 +743,8 @@ class ContentCannibalizationAnalyzer:
     
     @staticmethod
     async def analyze_serp_overlap(queries_df: pd.DataFrame, api_key: str, sample_size: int = 50, 
-                                   progress_callback=None, min_clicks: int = 1, branded_terms: List[str] = None) -> Dict:
+                                  progress_callback=None, min_clicks: int = 1, branded_terms: List[str] = None,
+                                  min_overlap_threshold: int = 65) -> Dict:
         """Analyze SERP overlap between queries using Serper API"""
         
         if not api_key:
@@ -647,18 +818,55 @@ class ContentCannibalizationAnalyzer:
         if not serp_data:
             return {"error": "No SERP data retrieved. Check your API key and queries."}
         
-        # Calculate overlap
+        # Final progress update for SERP fetching
+        if progress_callback:
+            progress_callback(100)
+        
+        # Calculate overlap with optimization for large datasets
         overlap_matrix = {}
         query_metrics = {}
         queries_with_issues = set()
         same_url_skipped = 0
+        comparisons_skipped = 0
         
         serp_items = list(serp_data.items())
-        for i in range(len(serp_items)):
-            for j in range(i + 1, len(serp_items)):
-                query1, serp1 = serp_items[i]
-                query2, serp2 = serp_items[j]
-                
+        total_comparisons = len(serp_items) * (len(serp_items) - 1) // 2
+        
+        # For large datasets, only compare queries with at least some domain overlap
+        if len(serp_items) > 100:
+            # Build domain index for faster lookups
+            domain_to_queries = {}
+            for query, domains in serp_data.items():
+                for domain in domains:
+                    if domain not in domain_to_queries:
+                        domain_to_queries[domain] = set()
+                    domain_to_queries[domain].add(query)
+            
+            # Find query pairs that share domains and pre-calculate overlap
+            query_pairs_to_check = []
+            checked_pairs = set()
+            
+            for domain, queries in domain_to_queries.items():
+                if len(queries) > 1:
+                    queries_list = list(queries)
+                    for i in range(len(queries_list)):
+                        for j in range(i + 1, len(queries_list)):
+                            pair = tuple(sorted([queries_list[i], queries_list[j]]))
+                            if pair not in checked_pairs:
+                                checked_pairs.add(pair)
+                                # Quick overlap calculation
+                                serp1 = set(serp_data[queries_list[i]])
+                                serp2 = set(serp_data[queries_list[j]])
+                                quick_overlap = len(serp1.intersection(serp2))
+                                max_possible = min(len(serp1), len(serp2))
+                                # Conservative estimate of overlap percentage
+                                if max_possible > 0 and (quick_overlap / max_possible * 100) >= min_overlap_threshold * 0.8:
+                                    query_pairs_to_check.append(pair)
+            
+            # Process only relevant pairs
+            comparisons_skipped = len(checked_pairs) - len(query_pairs_to_check)
+            
+            for query1, query2 in query_pairs_to_check:
                 # Check if both queries come from the same URL
                 query1_urls = set(queries_df[queries_df['Query'] == query1]['Landing Page'].unique())
                 query2_urls = set(queries_df[queries_df['Query'] == query2]['Landing Page'].unique())
@@ -668,11 +876,14 @@ class ContentCannibalizationAnalyzer:
                     same_url_skipped += 1
                     continue
                 
+                serp1 = serp_data[query1]
+                serp2 = serp_data[query2]
+                
                 overlap = set(serp1).intersection(set(serp2))
                 union = set(serp1).union(set(serp2))
                 overlap_pct = (len(overlap) / len(union)) * 100 if union else 0
                 
-                if overlap_pct > 65: # Updated threshold per user request
+                if overlap_pct >= min_overlap_threshold:  # Use the threshold
                     queries_with_issues.add(query1)
                     queries_with_issues.add(query2)
                     
@@ -681,45 +892,6 @@ class ContentCannibalizationAnalyzer:
                     # Get click data for both queries
                     q1_clicks = query_clicks.get(query1, 0)
                     q2_clicks = query_clicks.get(query2, 0)
-                    
-                    # Calculate position-weighted score
-                    position_score = 0
-                    if query1 in detailed_results and query2 in detailed_results:
-                        for domain in overlap:
-                            if domain in serp1 and domain in serp2:
-                                pos1 = serp1.index(domain) + 1
-                                pos2 = serp2.index(domain) + 1
-                                position_score += (11 - pos1) * (11 - pos2) / 100
-                    
-                    # Build full SERP data for display
-                    serp1_full = []
-                    serp2_full = []
-                    
-                    if query1 in detailed_results:
-                        for idx, (url, title) in enumerate(zip(detailed_results[query1]['urls'], 
-                                                              detailed_results[query1]['titles'])):
-                            domain = urlparse(url).netloc
-                            is_client = domain.lower() == client_domain if client_domain else False
-                            serp1_full.append({
-                                'position': idx + 1,
-                                'url': url,
-                                'title': title,
-                                'domain': domain,
-                                'is_client': is_client
-                            })
-                    
-                    if query2 in detailed_results:
-                        for idx, (url, title) in enumerate(zip(detailed_results[query2]['urls'], 
-                                                              detailed_results[query2]['titles'])):
-                            domain = urlparse(url).netloc
-                            is_client = domain.lower() == client_domain if client_domain else False
-                            serp2_full.append({
-                                'position': idx + 1,
-                                'url': url,
-                                'title': title,
-                                'domain': domain,
-                                'is_client': is_client
-                            })
                     
                     overlap_matrix[key] = {
                         "query1": query1,
@@ -730,12 +902,93 @@ class ContentCannibalizationAnalyzer:
                         "overlap_percentage": round(overlap_pct, 2),
                         "total_shared": len(overlap),
                         "position_weighted_score": round(position_score, 2),
-                        "competition_level": "High" if overlap_pct > 65 else "Medium" if overlap_pct > 40 else "Low",
-                        "serp1_results": serp1_full,
-                        "serp2_results": serp2_full,
+                        "competition_level": "Critical" if overlap_pct > 80 else "High" if overlap_pct > 65 else "Medium" if overlap_pct > 50 else "Low",
                         "query1_client_urls": list(query1_urls),
                         "query2_client_urls": list(query2_urls)
                     }
+        else:
+            # For smaller datasets, use original comparison method but with threshold
+            comparisons_checked = 0
+            for i in range(len(serp_items)):
+                for j in range(i + 1, len(serp_items)):
+                    query1, serp1 = serp_items[i]
+                    query2, serp2 = serp_items[j]
+                    
+                    # Quick pre-check for minimum overlap
+                    overlap_count = len(set(serp1).intersection(set(serp2)))
+                    max_possible = min(len(serp1), len(serp2))
+                    if max_possible > 0 and (overlap_count / max_possible * 100) < min_overlap_threshold * 0.8:
+                        comparisons_skipped += 1
+                        continue
+                    
+                    comparisons_checked += 1
+                    
+                    
+                    # Check if both queries come from the same URL
+                    query1_urls = set(queries_df[queries_df['Query'] == query1]['Landing Page'].unique())
+                    query2_urls = set(queries_df[queries_df['Query'] == query2]['Landing Page'].unique())
+                    
+                    # Skip if both queries are from the same URL(s)
+                    if query1_urls == query2_urls and len(query1_urls) == 1:
+                        same_url_skipped += 1
+                        continue
+                    
+                    overlap = set(serp1).intersection(set(serp2))
+                    union = set(serp1).union(set(serp2))
+                    overlap_pct = (len(overlap) / len(union)) * 100 if union else 0
+                    
+                    # Skip if both queries are from the same URL(s)
+                    if query1_urls == query2_urls and len(query1_urls) == 1:
+                        same_url_skipped += 1
+                        continue
+                    query1, serp1 = serp_items[i]
+                    query2, serp2 = serp_items[j]
+                    
+                    # Check if both queries come from the same URL
+                    query1_urls = set(queries_df[queries_df['Query'] == query1]['Landing Page'].unique())
+                    query2_urls = set(queries_df[queries_df['Query'] == query2]['Landing Page'].unique())
+                    
+                    # Skip if both queries are from the same URL(s)
+                    if query1_urls == query2_urls and len(query1_urls) == 1:
+                        same_url_skipped += 1
+                        continue
+                    
+                    overlap = set(serp1).intersection(set(serp2))
+                    union = set(serp1).union(set(serp2))
+                    overlap_pct = (len(overlap) / len(union)) * 100 if union else 0
+                    
+                    if overlap_pct >= min_overlap_threshold:  # Use the threshold
+                        queries_with_issues.add(query1)
+                        queries_with_issues.add(query2)
+                        
+                        key = f"{query1}||{query2}"
+                        
+                        # Get click data for both queries
+                        q1_clicks = query_clicks.get(query1, 0)
+                        q2_clicks = query_clicks.get(query2, 0)
+                        
+                        # Calculate position-weighted score
+                        position_score = 0
+                        if query1 in detailed_results and query2 in detailed_results:
+                            for domain in overlap:
+                                if domain in serp1 and domain in serp2:
+                                    pos1 = serp1.index(domain) + 1
+                                    pos2 = serp2.index(domain) + 1
+                                    position_score += (11 - pos1) * (11 - pos2) / 100
+                        
+                        overlap_matrix[key] = {
+                            "query1": query1,
+                            "query2": query2,
+                            "query1_clicks": q1_clicks,
+                            "query2_clicks": q2_clicks,
+                            "total_clicks": q1_clicks + q2_clicks,
+                            "overlap_percentage": round(overlap_pct, 2),
+                            "total_shared": len(overlap),
+                            "position_weighted_score": round(position_score, 2),
+                            "competition_level": "Critical" if overlap_pct > 80 else "High" if overlap_pct > 65 else "Medium" if overlap_pct > 50 else "Low",
+                            "query1_client_urls": list(query1_urls),
+                            "query2_client_urls": list(query2_urls)
+                        }
         
         # Individual query metrics
         for query, serp in serp_data.items():
@@ -748,12 +1001,62 @@ class ContentCannibalizationAnalyzer:
         
         # Sort results by overlap percentage descending
         top_overlaps = dict(sorted(overlap_matrix.items(), 
-                                   key=lambda x: x[1]['overlap_percentage'], 
-                                   reverse=True)[:20])
+                                 key=lambda x: x[1]['overlap_percentage'], 
+                                 reverse=True)[:20])
+        
+        # Now add full SERP data only for top overlaps
+        if detailed_results and client_domain:
+            for key, data in top_overlaps.items():
+                query1 = data['query1']
+                query2 = data['query2']
+                
+                # Build full SERP data for display
+                serp1_full = []
+                serp2_full = []
+                
+                if query1 in detailed_results:
+                    for idx, (url, title) in enumerate(zip(detailed_results[query1]['urls'], 
+                                                           detailed_results[query1]['titles'])):
+                        domain = urlparse(url).netloc
+                        is_client = domain.lower() == client_domain if client_domain else False
+                        serp1_full.append({
+                            'position': idx + 1,
+                            'url': url,
+                            'title': title,
+                            'domain': domain,
+                            'is_client': is_client
+                        })
+                
+                if query2 in detailed_results:
+                    for idx, (url, title) in enumerate(zip(detailed_results[query2]['urls'], 
+                                                           detailed_results[query2]['titles'])):
+                        domain = urlparse(url).netloc
+                        is_client = domain.lower() == client_domain if client_domain else False
+                        serp2_full.append({
+                            'position': idx + 1,
+                            'url': url,
+                            'title': title,
+                            'domain': domain,
+                            'is_client': is_client
+                        })
+                
+                data['serp1_results'] = serp1_full
+                data['serp2_results'] = serp2_full
         
         # Calculate severity
         avg_overlap = np.mean([v['overlap_percentage'] for v in overlap_matrix.values()]) if overlap_matrix else 0
         severity_info = calculate_severity(len(queries_with_issues), avg_overlap, "content")
+        
+        # Add comparison stats
+        if len(serp_items) > 100:
+            actual_comparisons = len(overlap_matrix) + same_url_skipped
+            theoretical_comparisons = total_comparisons
+            optimization_ratio = (1 - (actual_comparisons + comparisons_skipped) / theoretical_comparisons) * 100 if theoretical_comparisons > 0 else 0
+        else:
+            actual_comparisons = len(overlap_matrix) + same_url_skipped
+            theoretical_comparisons = total_comparisons
+            optimization_ratio = 0
+            comparisons_skipped = 0
         
         return {
             "total_queries_analyzed": len(serp_data),
@@ -769,7 +1072,11 @@ class ContentCannibalizationAnalyzer:
             "selection_criteria": f"{'ALL' if sample_size == 0 else f'{sample_size}'} queries analyzed",
             "branded_queries_removed": branded_queries_removed,
             "client_domain": client_domain,
-            "same_url_pairs_skipped": same_url_skipped
+            "same_url_pairs_skipped": same_url_skipped,
+            "comparisons_made": actual_comparisons,
+            "comparisons_optimized": optimization_ratio,
+            "comparisons_skipped": comparisons_skipped,
+            "overlap_threshold": min_overlap_threshold
         }
 
 class TopicCannibalizationAnalyzer:
@@ -884,8 +1191,8 @@ class TopicCannibalizationAnalyzer:
         
         # Create similarity DataFrame
         sim_df = pd.DataFrame(similarity_matrix, 
-                              index=valid_pages, 
-                              columns=valid_pages)
+                            index=valid_pages, 
+                            columns=valid_pages)
         
         # Calculate average (excluding diagonal)
         mask = np.ones_like(similarity_matrix, dtype=bool)
@@ -911,8 +1218,8 @@ class TopicCannibalizationAnalyzer:
 # ============================================================================
 
 def generate_comprehensive_report(keyword_results: Dict, content_results: Dict, 
-                                  topic_results: Dict, ai_provider: AIProvider,
-                                  ai_recommendations: Dict = None) -> str:
+                                 topic_results: Dict, ai_provider: AIProvider,
+                                 ai_recommendations: Dict = None) -> str:
     """Generate comprehensive analysis report with real insights"""
     
     # Get severity info
@@ -977,10 +1284,12 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         for i, (pages, data) in enumerate(list(keyword_results['top_issues'].items())[:5], 1):
             report += f"""
 **Issue #{i}: {data['overlap_percentage']}% Overlap - {data['total_clicks_affected']:,} Clicks Affected**
-- **Pages Competing:** - Page 1: `{data.get('page1_full', pages.split('||')[0])[:100]}`
+- **Pages Competing:** 
+  - Page 1: `{data.get('page1_full', pages.split('||')[0])[:100]}`
   - Page 2: `{data.get('page2_full', pages.split('||')[1])[:100]}`
 - **Shared Keywords:** {data['total_shared']} keywords
-- **Top Competing Keywords (by clicks):** """
+- **Top Competing Keywords (by clicks):** 
+"""
             for kw, clicks in data.get('shared_keywords_with_clicks', [])[:5]:
                 report += f"  - {kw} ({clicks:,} clicks)\n"
             
@@ -1146,7 +1455,7 @@ Based on the severity of issues found and clicks affected:
 # ============================================================================
 
 def generate_ai_recommendations(keyword_data: Dict, content_data: Dict, 
-                                topic_data: Dict, ai_provider: AIProvider) -> Dict:
+                               topic_data: Dict, ai_provider: AIProvider) -> Dict:
     """Generate comprehensive AI-powered recommendations based on analysis results"""
     
     recommendations = {
@@ -1210,9 +1519,9 @@ def generate_ai_recommendations(keyword_data: Dict, content_data: Dict,
                     "page2_type": page2_type,
                     "action": "Differentiate content focus" if not pages_incompatible else "CANNOT merge - incompatible page types",
                     "reason": f"{overlap_pct}% overlap on {data['total_shared']} keywords" + 
-                              (f" - {page1_type} vs {page2_type} pages" if pages_incompatible else ""),
+                             (f" - {page1_type} vs {page2_type} pages" if pages_incompatible else ""),
                     "strategy": "Re-optimize for different search intents" if not pages_incompatible else 
-                                "Keep pages separate but differentiate keywords",
+                               "Keep pages separate but differentiate keywords",
                     "suggestions": [
                         f"Page 1 ({page1_type}): Target transactional intent for top keywords" if not pages_incompatible else
                         f"Page 1 ({page1_type}): Focus on {page1_type}-specific keywords",
@@ -1235,8 +1544,9 @@ def generate_ai_recommendations(keyword_data: Dict, content_data: Dict,
     
     # Analyze content/SERP cannibalization
     if content_data and content_data.get('top_overlaps'):
+        overlap_threshold = content_data.get('overlap_threshold', 65)
         for query_pair, data in list(content_data.get('top_overlaps', {}).items())[:5]:
-            if data['overlap_percentage'] > 65:
+            if data['overlap_percentage'] >= overlap_threshold:
                 # Check if queries come from different URLs
                 q1_urls = data.get('query1_client_urls', [])
                 q2_urls = data.get('query2_client_urls', [])
@@ -1307,7 +1617,7 @@ def generate_ai_recommendations(keyword_data: Dict, content_data: Dict,
                     "page_types": [page1_type, page2_type],
                     "similarity": f"{similarity * 100:.1f}%",
                     "action": "Differentiate topic focus" if not pages_incompatible else 
-                              f"CANNOT merge - incompatible page types ({page1_type} vs {page2_type})",
+                             f"CANNOT merge - incompatible page types ({page1_type} vs {page2_type})",
                     "suggestions": [
                         "Target different audience segments" if not pages_incompatible else
                         f"Ensure {page1_type} page focuses on {page1_type}-specific content",
@@ -1393,8 +1703,8 @@ def generate_ai_recommendations(keyword_data: Dict, content_data: Dict,
     return recommendations
 
 def generate_ai_enhanced_recommendations(keyword_data: Dict, content_data: Dict, 
-                                           topic_data: Dict, base_recommendations: Dict,
-                                           ai_provider: AIProvider) -> str:
+                                       topic_data: Dict, base_recommendations: Dict,
+                                       ai_provider: AIProvider) -> str:
     """Generate AI-enhanced recommendations with specific examples"""
     
     # Prepare context for AI
@@ -1624,12 +1934,12 @@ def display_ai_recommendations(recommendations: Dict):
                 st.write("• Monitor & adjust")
     
     # Download recommendations
-    if st.button("📥 Download Recommendations", use_container_width=True):
+    if st.button("📥 Download AI Recommendations Report", use_container_width=True):
         report_text = generate_recommendations_report(recommendations)
         st.download_button(
-            label="Download Recommendations Report",
+            label="Download Recommendations Report (Markdown)",
             data=report_text,
-            file_name=f"cannibalization_recommendations_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
+            file_name=f"ai_recommendations_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
             mime="text/markdown"
         )
 
@@ -1810,11 +2120,17 @@ def main():
             min_value=0.5, max_value=1.0, value=0.8, step=0.05,
             help="Minimum similarity score to flag"
         )
+        
+        serp_overlap_threshold = st.slider(
+            "Minimum SERP Overlap Threshold (%)",
+            min_value=30, max_value=100, value=65, step=5,
+            help="Only analyze query pairs with at least this % of SERP overlap. Lower = more comparisons but finds lighter issues, Higher = fewer comparisons but only finds severe issues"
+        )
     
     # Main content tabs
     tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Data Upload", "🔤 Keyword Analysis", 
-                                            "📑 Content Analysis", "🧠 Topic Analysis", 
-                                            "🤖 AI Insights & Recommendations"])
+                                             "📑 Content Analysis", "🧠 Topic Analysis", 
+                                             "🤖 AI Insights & Recommendations"])
     
     with tab1:
         st.header("Upload Your Data")
@@ -1969,6 +2285,17 @@ def main():
                                     st.warning("⚠️ High: Differentiate content significantly")
                                 else:
                                     st.info("ℹ️ Moderate: Monitor and optimize")
+                    
+                    # Download button for keyword report
+                    st.divider()
+                    if st.button("📥 Download Keyword Analysis Report", use_container_width=True, key="download_keyword"):
+                        report = generate_keyword_report(results)
+                        st.download_button(
+                            label="Download Report (Markdown)",
+                            data=report,
+                            file_name=f"keyword_cannibalization_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
+                            mime="text/markdown"
+                        )
         else:
             st.info("📤 Please upload a GSC report in the Data Upload tab")
     
@@ -1979,6 +2306,19 @@ def main():
             if not serper_api_key:
                 st.error("🔑 Please enter your Serper API key in the sidebar")
                 st.info("[Get your API key at serper.dev](https://serper.dev) - 2,500 free queries/month")
+                st.markdown(f"*Note: The app pre-filters comparisons to only analyze query pairs with ≥{serp_overlap_threshold}% potential overlap*")
+                
+                # Explanation of SERP overlap
+                with st.expander("ℹ️ What is SERP Overlap?"):
+                    st.markdown("""
+                    **SERP Overlap** measures how similar the search results are between two queries:
+                    - **30-50% overlap**: Light cannibalization - queries share some results but serve different intents
+                    - **50-65% overlap**: Moderate cannibalization - queries are competing for similar search intent
+                    - **65-80% overlap**: High cannibalization - queries likely target the same intent
+                    - **80%+ overlap**: Critical cannibalization - queries are essentially duplicates
+                    
+                    Setting a higher threshold (e.g., 65%) focuses on finding severe issues only.
+                    """)
             else:
                 # Show preview
                 total_queries = st.session_state['gsc_df']['Query'].nunique()
@@ -2000,9 +2340,9 @@ def main():
                 
                 if serp_sample_size == 0:
                     st.warning(f"⚠️ Analyzing ALL {queries_meeting_threshold} queries will use {queries_meeting_threshold} API credits!")
-                    st.info(f"Ready to analyze ALL {queries_meeting_threshold} queries with ≥{min_clicks_serp} clicks")
+                    st.info(f"Ready to analyze ALL {queries_meeting_threshold} queries with ≥{min_clicks_serp} clicks (threshold: ≥{serp_overlap_threshold}% SERP overlap)")
                 else:
-                    st.info(f"Ready to analyze {min(serp_sample_size, queries_meeting_threshold)} queries (limited from {queries_meeting_threshold} total)")
+                    st.info(f"Ready to analyze {min(serp_sample_size, queries_meeting_threshold)} queries (threshold: ≥{serp_overlap_threshold}% SERP overlap)")
                 
                 if st.button("Analyze SERP Overlap", type="primary", key="serp_btn"):
                     progress_bar = st.progress(0)
@@ -2011,6 +2351,7 @@ def main():
                     actual_queries_to_analyze = queries_meeting_threshold if serp_sample_size == 0 else min(serp_sample_size, queries_meeting_threshold)
                     progress_message = f"Analyzing SERPs for {actual_queries_to_analyze} queries..."
                     
+                    with st.spinner(progress_message):
                     with st.spinner(progress_message):
                         # Progress callback
                         def update_progress(value):
@@ -2029,7 +2370,8 @@ def main():
                                     serp_sample_size,
                                     update_progress,
                                     min_clicks_serp,
-                                    branded_terms_list
+                                    branded_terms_list,
+                                    serp_overlap_threshold
                                 )
                             )
                             
@@ -2048,7 +2390,7 @@ def main():
                                 with col1:
                                     st.metric("Queries Analyzed", results['total_queries_analyzed'])
                                 with col2:
-                                    st.metric("Queries with Overlap (>65%)", results['queries_with_overlap'])
+                                    st.metric(f"Queries with Overlap (≥{serp_overlap_threshold}%)", results['queries_with_overlap'])
                                 with col3:
                                     st.metric("Avg SERP Overlap", f"{results['average_overlap']:.1f}%")
                                 with col4:
@@ -2066,15 +2408,26 @@ def main():
                                 if results.get('branded_queries_removed', 0) > 0:
                                     st.info(f"ℹ️ Filtered out {results['branded_queries_removed']} queries containing branded terms")
                                 
-                                # Same URL pairs skipped info
+                # Same URL pairs skipped info
                                 if results.get('same_url_pairs_skipped', 0) > 0:
                                     st.success(f"✅ Correctly skipped {results['same_url_pairs_skipped']} query pairs from the same URL (not cannibalization)")
+                                
+                                # Comparisons skipped due to threshold
+                                if results.get('comparisons_skipped', 0) > 0:
+                                    st.info(f"ℹ️ Skipped {results['comparisons_skipped']:,} query pairs with <{serp_overlap_threshold}% overlap (below threshold)")
                                 
                                 # Top overlaps
                                 if results.get('top_overlaps'):
                                     st.subheader("🔥 Top SERP Overlaps (Sorted by Overlap %)")
                                     for query_pair, data in list(results['top_overlaps'].items())[:10]:
-                                        with st.expander(f"{data['overlap_percentage']}% SERP Overlap - {data['competition_level']} Competition - {data['total_clicks']:,} total clicks"):
+                                        competition_color = {
+                                            "Critical": "🔴",
+                                            "High": "🟠", 
+                                            "Medium": "🟡",
+                                            "Low": "🟢"
+                                        }.get(data['competition_level'], "")
+                                        
+                                        with st.expander(f"{data['overlap_percentage']}% SERP Overlap - {competition_color} {data['competition_level']} Competition - {data['total_clicks']:,} total clicks"):
                                             # Query info
                                             col1, col2 = st.columns(2)
                                             with col1:
@@ -2113,10 +2466,21 @@ def main():
                                                         st.write(f"{result['position']}. {result['title'][:50]}...")
                                                         st.caption(f"   {result['domain']}")
                                             
-                                            if data['overlap_percentage'] > 65:
-                                                st.error("⚠️ Critical: Same search intent - consider consolidating content")
+                                            if data['overlap_percentage'] >= serp_overlap_threshold:
+                                                st.error(f"⚠️ Critical: Same search intent - consider consolidating content")
                                             else:
-                                                st.info("ℹ️ Moderate overlap - differentiate content angles")
+                                                st.info("ℹ️ Below threshold but worth monitoring")
+                                
+                                # Download button for content report
+                                st.divider()
+                                if st.button("📥 Download Content Analysis Report", use_container_width=True, key="download_content"):
+                                    report = generate_content_report(results)
+                                    st.download_button(
+                                        label="Download Report (Markdown)",
+                                        data=report,
+                                        file_name=f"content_cannibalization_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
+                                        mime="text/markdown"
+                                    )
                             else:
                                 st.error(f"❌ {results.get('error', 'Unknown error')}")
                                 
@@ -2197,8 +2561,19 @@ def main():
                                 labels={'x': 'Similarity Score', 'y': 'Number of Page Pairs'}
                             )
                             fig.add_vline(x=similarity_threshold, line_dash="dash", line_color="red",
-                                          annotation_text=f"Threshold: {similarity_threshold}")
+                                        annotation_text=f"Threshold: {similarity_threshold}")
                             st.plotly_chart(fig, use_container_width=True)
+                        
+                        # Download button for topic report
+                        st.divider()
+                        if st.button("📥 Download Topic Analysis Report", use_container_width=True, key="download_topic"):
+                            report = generate_topic_report(results)
+                            st.download_button(
+                                label="Download Report (Markdown)",
+                                data=report,
+                                file_name=f"topic_cannibalization_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
+                                mime="text/markdown"
+                            )
                     else:
                         st.error(f"❌ {results.get('error', 'Unknown error')}")
         else:
@@ -2301,9 +2676,32 @@ def main():
     ])
     
     if has_results:
-        # AI Insights reminder
-        if 'ai_recommendations' not in st.session_state:
-            st.info("💡 Don't forget to check the **AI Insights & Recommendations** tab for actionable fixes!")
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            # AI Insights reminder
+            if 'ai_recommendations' not in st.session_state:
+                st.info("💡 Don't forget to check the **AI Insights & Recommendations** tab for actionable fixes!")
+            
+            # Comprehensive report download
+            if st.button("📋 Download Complete Analysis Report", type="primary", use_container_width=True):
+                with st.spinner("Generating comprehensive report..."):
+                    # Include AI recommendations if available
+                    ai_recommendations = st.session_state.get('ai_recommendations', {})
+                    
+                    report = generate_comprehensive_report(
+                        st.session_state.get('keyword_results', {}),
+                        st.session_state.get('content_results', {}),
+                        st.session_state.get('topic_results', {}),
+                        ai_provider,
+                        ai_recommendations
+                    )
+                    
+                    st.download_button(
+                        label="Download Complete Report (Markdown)",
+                        data=report,
+                        file_name=f"seo_cannibalization_complete_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
+                        mime="text/markdown"
+                    )
     else:
         st.info("📊 Run at least one analysis to generate insights")
 
