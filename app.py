@@ -19,7 +19,6 @@ from typing import Dict, List, Tuple, Optional
 import time
 import io
 import re
-import re
 
 # AI Provider Imports (optional)
 try:
@@ -170,7 +169,7 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 - **Total Pages Analyzed:** {results.get('total_pages', 0)}
 - **Pages with High Similarity:** {results.get('pages_with_high_similarity', 0)}
 - **Total Similarity Pairs:** {results.get('total_similarity_pairs', 0)}
-- **Average Similarity:** {results.get('average_similarity', 0):.3f}
+- **Average Similarity Score:** {results.get('average_similarity', 0):.3f}
 - **Embedding Dimension:** {results.get('embedding_dimension', 0)}
 - **Severity:** {results.get('severity_info', {}).get('severity', 'N/A')}
 
@@ -831,6 +830,15 @@ class ContentCannibalizationAnalyzer:
                     q1_clicks = query_clicks.get(query1, 0)
                     q2_clicks = query_clicks.get(query2, 0)
                     
+                    # Calculate position-weighted score
+                    position_score = 0
+                    if query1 in detailed_results and query2 in detailed_results:
+                        for domain in overlap:
+                            if domain in serp1 and domain in serp2:
+                                pos1 = serp1.index(domain) + 1
+                                pos2 = serp2.index(domain) + 1
+                                position_score += (11 - pos1) * (11 - pos2) / 100
+                    
                     overlap_matrix[key] = {
                         "query1": query1,
                         "query2": query2,
@@ -860,27 +868,6 @@ class ContentCannibalizationAnalyzer:
                         continue
                     
                     comparisons_checked += 1
-                    
-                    
-                    # Check if both queries come from the same URL
-                    query1_urls = set(queries_df[queries_df['Query'] == query1]['Landing Page'].unique())
-                    query2_urls = set(queries_df[queries_df['Query'] == query2]['Landing Page'].unique())
-                    
-                    # Skip if both queries are from the same URL(s)
-                    if query1_urls == query2_urls and len(query1_urls) == 1:
-                        same_url_skipped += 1
-                        continue
-                    
-                    overlap = set(serp1).intersection(set(serp2))
-                    union = set(serp1).union(set(serp2))
-                    overlap_pct = (len(overlap) / len(union)) * 100 if union else 0
-                    
-                    # Skip if both queries are from the same URL(s)
-                    if query1_urls == query2_urls and len(query1_urls) == 1:
-                        same_url_skipped += 1
-                        continue
-                    query1, serp1 = serp_items[i]
-                    query2, serp2 = serp_items[j]
                     
                     # Check if both queries come from the same URL
                     query1_urls = set(queries_df[queries_df['Query'] == query1]['Landing Page'].unique())
@@ -1032,7 +1019,6 @@ class TopicCannibalizationAnalyzer:
                 embeddings = ast.literal_eval(embeddings_str)
             except:
                 # Extract numbers as last resort
-                import re
                 numbers = re.findall(r'-?\d+\.?\d*', embeddings_str)
                 embeddings = [float(n) for n in numbers]
         
@@ -1272,7 +1258,7 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 {topic_severity.get('color', '')} **Severity: {topic_severity.get('severity', 'N/A')}**
 
 ### Key Metrics:
-- **Pages Analyzed:** {topic_results.get('total_pages', 0)}
+- **Total Pages Analyzed:** {topic_results.get('total_pages', 0)}
 - **Pages with High Similarity:** {topic_results.get('pages_with_high_similarity', 0)}
 - **Similarity Pairs Found:** {topic_results.get('total_similarity_pairs', 0)}
 - **Average Similarity Score:** {topic_results.get('average_similarity', 0):.3f}
@@ -2290,7 +2276,6 @@ def main():
                     progress_message = f"Analyzing SERPs for {actual_queries_to_analyze} queries..."
                     
                     with st.spinner(progress_message):
-                    with st.spinner(progress_message):
                         # Progress callback
                         def update_progress(value):
                             progress_bar.progress(int(value))
@@ -2346,7 +2331,7 @@ def main():
                                 if results.get('branded_queries_removed', 0) > 0:
                                     st.info(f"ℹ️ Filtered out {results['branded_queries_removed']} queries containing branded terms")
                                 
-                # Same URL pairs skipped info
+                                # Same URL pairs skipped info
                                 if results.get('same_url_pairs_skipped', 0) > 0:
                                     st.success(f"✅ Correctly skipped {results['same_url_pairs_skipped']} query pairs from the same URL (not cannibalization)")
                                 
