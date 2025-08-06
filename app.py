@@ -88,6 +88,7 @@ st.markdown("""
 # INDIVIDUAL REPORT GENERATION FUNCTIONS
 # ============================================================================
 
+@st.cache_data
 def generate_keyword_report(results: Dict) -> str:
     """Generate keyword cannibalization report"""
     report = f"""# Keyword Cannibalization Report
@@ -121,6 +122,7 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
     
     return report
 
+@st.cache_data
 def generate_content_report(results: Dict) -> str:
     """Generate content/SERP cannibalization report"""
     threshold = results.get('overlap_threshold', 65)
@@ -160,6 +162,7 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
     
     return report
 
+@st.cache_data
 def generate_topic_report(results: Dict) -> str:
     """Generate topic/semantic cannibalization report"""
     report = f"""# Topic/Semantic Cannibalization Report
@@ -1141,8 +1144,9 @@ class TopicCannibalizationAnalyzer:
 # ENHANCED REPORT GENERATION
 # ============================================================================
 
+@st.cache_data
 def generate_comprehensive_report(keyword_results: Dict, content_results: Dict, 
-                                 topic_results: Dict, ai_provider: AIProvider,
+                                 topic_results: Dict, ai_provider_name: str = "",
                                  ai_recommendations: Dict = None) -> str:
     """Generate comprehensive analysis report with real insights"""
     
@@ -1282,15 +1286,13 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 """
     
     # Add AI analysis if available
-    if ai_provider and ai_provider.client:
+    if ai_provider_name:
         report += "\n---\n\n## 🤖 AI-Powered Strategic Recommendations\n\n"
-        ai_analysis = ai_provider.generate_detailed_analysis(
-            keyword_results, content_results, topic_results
-        )
-        if ai_analysis and not ai_analysis.startswith("Could not"):
-            report += ai_analysis
-        else:
-            report += "*(AI analysis not available - configure AI provider for detailed recommendations)*"
+        # Note: AI analysis would be included here if ai_provider was available
+        report += "*(AI analysis was configured during this analysis)*"
+    else:
+        report += "\n---\n\n## 🤖 AI-Powered Strategic Recommendations\n\n"
+        report += "*(AI analysis not available - configure AI provider for detailed recommendations)*"
     
     # Add specific actionable recommendations if available
     if ai_recommendations and ai_recommendations.get("immediate_actions"):
@@ -1859,16 +1861,16 @@ def display_ai_recommendations(recommendations: Dict):
     
     # Download recommendations (only show if recommendations exist)
     if recommendations:
-        report_text = generate_recommendations_report(recommendations)
         st.download_button(
             label="📥 Download AI Recommendations Report (Markdown)",
-            data=report_text,
+            data=generate_recommendations_report(recommendations),
             file_name=f"ai_recommendations_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
             mime="text/markdown",
             use_container_width=True,
-            key="download_ai_recommendations_btn"
+            key="download_ai_recommendations_final"
         )
 
+@st.cache_data
 def generate_recommendations_report(recommendations: Dict) -> str:
     """Generate a downloadable recommendations report"""
     
@@ -2159,71 +2161,73 @@ def main():
                         branded_terms_list
                     )
                     st.session_state['keyword_results'] = results
-                    
-                    # Display severity badge
-                    severity = results.get('severity_info', {})
-                    st.markdown(f"<div class='severity-{severity.get('severity', '').lower()}'>{severity.get('color', '')} {severity.get('severity', 'Unknown')} SEVERITY - {severity.get('impact', '')}</div>", unsafe_allow_html=True)
-                    
-                    # Display metrics
-                    col1, col2, col3, col4 = st.columns(4)
-                    with col1:
-                        st.metric("Total Pages", results['total_pages_analyzed'])
-                    with col2:
-                        st.metric("Pages with Issues", results['pages_with_cannibalization'])
-                    with col3:
-                        st.metric("Overlap Pairs", results['total_overlap_pairs'])
-                    with col4:
-                        st.metric("Clicks Affected", f"{results['total_clicks_affected']:,}")
-                    
-                    # Show branded terms filtered if any
-                    if results.get('branded_queries_removed', 0) > 0:
-                        st.info(f"ℹ️ Filtered out {results['branded_queries_removed']} queries containing branded terms")
-                    
-                    # Display top issues
-                    if results['top_issues']:
-                        st.subheader("🔥 Top Cannibalization Issues (Sorted by Click Impact)")
-                        for i, (pages, data) in enumerate(list(results['top_issues'].items())[:10], 1):
-                            with st.expander(f"Issue #{i}: {data['total_clicks_affected']:,} clicks affected - {data['overlap_percentage']}% overlap - {data['total_shared']} shared keywords"):
-                                col1, col2 = st.columns(2)
-                                with col1:
-                                    st.write("**Page 1:**")
-                                    st.code(data.get('page1_full', pages.split('||')[0]))
-                                    if data.get('normalized_page1'):
-                                        st.caption(f"Normalized: {data['normalized_page1'][:80]}...")
-                                    st.metric("Unique Keywords", data.get('page1_unique', 0))
-                                with col2:
-                                    st.write("**Page 2:**")
-                                    st.code(data.get('page2_full', pages.split('||')[1]))
-                                    if data.get('normalized_page2'):
-                                        st.caption(f"Normalized: {data['normalized_page2'][:80]}...")
-                                    st.metric("Unique Keywords", data.get('page2_unique', 0))
-                                
-                                st.write("**Top Shared Keywords (by clicks):**")
-                                if data.get('shared_keywords_with_clicks'):
-                                    for kw, clicks in data['shared_keywords_with_clicks'][:10]:
-                                        st.write(f"• {kw} ({clicks:,} clicks)")
-                                else:
-                                    st.write(", ".join(data['shared_keywords'][:20]))
-                                
-                                if data['overlap_percentage'] > 70:
-                                    st.error("⚠️ Critical: Consider merging these pages")
-                                elif data['overlap_percentage'] > 40:
-                                    st.warning("⚠️ High: Differentiate content significantly")
-                                else:
-                                    st.info("ℹ️ Moderate: Monitor and optimize")
-                    
-                    # Download button for keyword report (only show if results exist)
-                    if results:
-                        st.divider()
-                        report = generate_keyword_report(results)
-                        st.download_button(
-                            label="📥 Download Keyword Analysis Report (Markdown)",
-                            data=report,
-                            file_name=f"keyword_cannibalization_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
-                            mime="text/markdown",
-                            use_container_width=True,
-                            key="download_keyword_btn"
-                        )
+            
+            # Display results if they exist in session state
+            if 'keyword_results' in st.session_state:
+                results = st.session_state['keyword_results']
+                
+                # Display severity badge
+                severity = results.get('severity_info', {})
+                st.markdown(f"<div class='severity-{severity.get('severity', '').lower()}'>{severity.get('color', '')} {severity.get('severity', 'Unknown')} SEVERITY - {severity.get('impact', '')}</div>", unsafe_allow_html=True)
+                
+                # Display metrics
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Total Pages", results['total_pages_analyzed'])
+                with col2:
+                    st.metric("Pages with Issues", results['pages_with_cannibalization'])
+                with col3:
+                    st.metric("Overlap Pairs", results['total_overlap_pairs'])
+                with col4:
+                    st.metric("Clicks Affected", f"{results['total_clicks_affected']:,}")
+                
+                # Show branded terms filtered if any
+                if results.get('branded_queries_removed', 0) > 0:
+                    st.info(f"ℹ️ Filtered out {results['branded_queries_removed']} queries containing branded terms")
+                
+                # Display top issues
+                if results['top_issues']:
+                    st.subheader("🔥 Top Cannibalization Issues (Sorted by Click Impact)")
+                    for i, (pages, data) in enumerate(list(results['top_issues'].items())[:10], 1):
+                        with st.expander(f"Issue #{i}: {data['total_clicks_affected']:,} clicks affected - {data['overlap_percentage']}% overlap - {data['total_shared']} shared keywords"):
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                st.write("**Page 1:**")
+                                st.code(data.get('page1_full', pages.split('||')[0]))
+                                if data.get('normalized_page1'):
+                                    st.caption(f"Normalized: {data['normalized_page1'][:80]}...")
+                                st.metric("Unique Keywords", data.get('page1_unique', 0))
+                            with col2:
+                                st.write("**Page 2:**")
+                                st.code(data.get('page2_full', pages.split('||')[1]))
+                                if data.get('normalized_page2'):
+                                    st.caption(f"Normalized: {data['normalized_page2'][:80]}...")
+                                st.metric("Unique Keywords", data.get('page2_unique', 0))
+                            
+                            st.write("**Top Shared Keywords (by clicks):**")
+                            if data.get('shared_keywords_with_clicks'):
+                                for kw, clicks in data['shared_keywords_with_clicks'][:10]:
+                                    st.write(f"• {kw} ({clicks:,} clicks)")
+                            else:
+                                st.write(", ".join(data['shared_keywords'][:20]))
+                            
+                            if data['overlap_percentage'] > 70:
+                                st.error("⚠️ Critical: Consider merging these pages")
+                            elif data['overlap_percentage'] > 40:
+                                st.warning("⚠️ High: Differentiate content significantly")
+                            else:
+                                st.info("ℹ️ Moderate: Monitor and optimize")
+                
+                # Download button - always available when results exist
+                st.divider()
+                st.download_button(
+                    label="📥 Download Keyword Analysis Report (Markdown)",
+                    data=generate_keyword_report(results),
+                    file_name=f"keyword_cannibalization_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
+                    mime="text/markdown",
+                    use_container_width=True,
+                    key="download_keyword_final"
+                )
         else:
             st.info("📤 Please upload a GSC report in the Data Upload tab")
     
@@ -2307,111 +2311,114 @@ def main():
                             
                             if 'error' not in results:
                                 st.session_state['content_results'] = results
-                                
-                                # Display severity
-                                severity = results.get('severity_info', {})
-                                st.markdown(f"<div class='severity-{severity.get('severity', '').lower()}'>{severity.get('color', '')} {severity.get('severity', 'Unknown')} SEVERITY - {severity.get('impact', '')}</div>", unsafe_allow_html=True)
-                                
-                                # Display metrics
-                                col1, col2, col3, col4 = st.columns(4)
+                            
+            # Display results if they exist in session state  
+            if 'content_results' in st.session_state:
+                results = st.session_state['content_results']
+                
+                if 'error' not in results:
+                    # Display severity
+                    severity = results.get('severity_info', {})
+                    st.markdown(f"<div class='severity-{severity.get('severity', '').lower()}'>{severity.get('color', '')} {severity.get('severity', 'Unknown')} SEVERITY - {severity.get('impact', '')}</div>", unsafe_allow_html=True)
+                    
+                    # Display metrics
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.metric("Queries Analyzed", results['total_queries_analyzed'])
+                    with col2:
+                        st.metric(f"Queries with Overlap (≥{serp_overlap_threshold}%)", results['queries_with_overlap'])
+                    with col3:
+                        st.metric("Avg SERP Overlap", f"{results['average_overlap']:.1f}%")
+                    with col4:
+                        st.metric("API Credits Used", results.get('api_credits_used', 0))
+                    
+                    # Show detected client domain
+                    if results.get('client_domain'):
+                        st.info(f"🌐 Detected client domain: **{results['client_domain']}**")
+                    
+                    # Failed queries warning
+                    if results.get('failed_queries'):
+                        st.warning(f"⚠️ Failed to fetch SERPs for {len(results['failed_queries'])} queries")
+                    
+                    # Branded terms filtered info
+                    if results.get('branded_queries_removed', 0) > 0:
+                        st.info(f"ℹ️ Filtered out {results['branded_queries_removed']} queries containing branded terms")
+                    
+                    # Same URL pairs skipped info
+                    if results.get('same_url_pairs_skipped', 0) > 0:
+                        st.success(f"✅ Correctly skipped {results['same_url_pairs_skipped']} query pairs from the same URL (not cannibalization)")
+                    
+                    # Comparisons skipped due to threshold
+                    if results.get('comparisons_skipped', 0) > 0:
+                        st.info(f"ℹ️ Skipped {results['comparisons_skipped']:,} query pairs with <{serp_overlap_threshold}% overlap (below threshold)")
+                    
+                    # Top overlaps
+                    if results.get('top_overlaps'):
+                        st.subheader("🔥 Top SERP Overlaps (Sorted by Overlap %)")
+                        for query_pair, data in list(results['top_overlaps'].items())[:10]:
+                            competition_color = {
+                                "Critical": "🔴",
+                                "High": "🟠", 
+                                "Medium": "🟡",
+                                "Low": "🟢"
+                            }.get(data['competition_level'], "")
+                            
+                            with st.expander(f"{data['overlap_percentage']}% SERP Overlap - {competition_color} {data['competition_level']} Competition - {data['total_clicks']:,} total clicks"):
+                                # Query info
+                                col1, col2 = st.columns(2)
                                 with col1:
-                                    st.metric("Queries Analyzed", results['total_queries_analyzed'])
+                                    st.write(f"**Query 1:** {data.get('query1', 'N/A')}")
+                                    st.metric("Clicks", f"{data.get('query1_clicks', 0):,}")
+                                    if data.get('query1_client_urls'):
+                                        st.caption(f"Your URL: {data['query1_client_urls'][0][:60]}...")
                                 with col2:
-                                    st.metric(f"Queries with Overlap (≥{serp_overlap_threshold}%)", results['queries_with_overlap'])
-                                with col3:
-                                    st.metric("Avg SERP Overlap", f"{results['average_overlap']:.1f}%")
-                                with col4:
-                                    st.metric("API Credits Used", results.get('api_credits_used', 0))
+                                    st.write(f"**Query 2:** {data.get('query2', 'N/A')}")
+                                    st.metric("Clicks", f"{data.get('query2_clicks', 0):,}")
+                                    if data.get('query2_client_urls'):
+                                        st.caption(f"Your URL: {data['query2_client_urls'][0][:60]}...")
                                 
-                                # Show detected client domain
-                                if results.get('client_domain'):
-                                    st.info(f"🌐 Detected client domain: **{results['client_domain']}**")
+                                st.write(f"**SERP Overlap: {data['overlap_percentage']}% ({data['total_shared']} shared results)**")
                                 
-                                # Failed queries warning
-                                if results.get('failed_queries'):
-                                    st.warning(f"⚠️ Failed to fetch SERPs for {len(results['failed_queries'])} queries")
+                                # Show SERP results side by side
+                                serp_col1, serp_col2 = st.columns(2)
                                 
-                                # Branded terms filtered info
-                                if results.get('branded_queries_removed', 0) > 0:
-                                    st.info(f"ℹ️ Filtered out {results['branded_queries_removed']} queries containing branded terms")
+                                with serp_col1:
+                                    st.write(f"**SERP for: {data.get('query1', '')}**")
+                                    for result in data.get('serp1_results', [])[:10]:
+                                        if result['is_client']:
+                                            st.success(f"{result['position']}. **[YOUR SITE]** {result['title'][:50]}...")
+                                            st.caption(f"   {result['url'][:60]}...")
+                                        else:
+                                            st.write(f"{result['position']}. {result['title'][:50]}...")
+                                            st.caption(f"   {result['domain']}")
                                 
-                                # Same URL pairs skipped info
-                                if results.get('same_url_pairs_skipped', 0) > 0:
-                                    st.success(f"✅ Correctly skipped {results['same_url_pairs_skipped']} query pairs from the same URL (not cannibalization)")
+                                with serp_col2:
+                                    st.write(f"**SERP for: {data.get('query2', '')}**")
+                                    for result in data.get('serp2_results', [])[:10]:
+                                        if result['is_client']:
+                                            st.success(f"{result['position']}. **[YOUR SITE]** {result['title'][:50]}...")
+                                            st.caption(f"   {result['url'][:60]}...")
+                                        else:
+                                            st.write(f"{result['position']}. {result['title'][:50]}...")
+                                            st.caption(f"   {result['domain']}")
                                 
-                                # Comparisons skipped due to threshold
-                                if results.get('comparisons_skipped', 0) > 0:
-                                    st.info(f"ℹ️ Skipped {results['comparisons_skipped']:,} query pairs with <{serp_overlap_threshold}% overlap (below threshold)")
-                                
-                                # Top overlaps
-                                if results.get('top_overlaps'):
-                                    st.subheader("🔥 Top SERP Overlaps (Sorted by Overlap %)")
-                                    for query_pair, data in list(results['top_overlaps'].items())[:10]:
-                                        competition_color = {
-                                            "Critical": "🔴",
-                                            "High": "🟠", 
-                                            "Medium": "🟡",
-                                            "Low": "🟢"
-                                        }.get(data['competition_level'], "")
-                                        
-                                        with st.expander(f"{data['overlap_percentage']}% SERP Overlap - {competition_color} {data['competition_level']} Competition - {data['total_clicks']:,} total clicks"):
-                                            # Query info
-                                            col1, col2 = st.columns(2)
-                                            with col1:
-                                                st.write(f"**Query 1:** {data.get('query1', 'N/A')}")
-                                                st.metric("Clicks", f"{data.get('query1_clicks', 0):,}")
-                                                if data.get('query1_client_urls'):
-                                                    st.caption(f"Your URL: {data['query1_client_urls'][0][:60]}...")
-                                            with col2:
-                                                st.write(f"**Query 2:** {data.get('query2', 'N/A')}")
-                                                st.metric("Clicks", f"{data.get('query2_clicks', 0):,}")
-                                                if data.get('query2_client_urls'):
-                                                    st.caption(f"Your URL: {data['query2_client_urls'][0][:60]}...")
-                                            
-                                            st.write(f"**SERP Overlap: {data['overlap_percentage']}% ({data['total_shared']} shared results)**")
-                                            
-                                            # Show SERP results side by side
-                                            serp_col1, serp_col2 = st.columns(2)
-                                            
-                                            with serp_col1:
-                                                st.write(f"**SERP for: {data.get('query1', '')}**")
-                                                for result in data.get('serp1_results', [])[:10]:
-                                                    if result['is_client']:
-                                                        st.success(f"{result['position']}. **[YOUR SITE]** {result['title'][:50]}...")
-                                                        st.caption(f"   {result['url'][:60]}...")
-                                                    else:
-                                                        st.write(f"{result['position']}. {result['title'][:50]}...")
-                                                        st.caption(f"   {result['domain']}")
-                                            
-                                            with serp_col2:
-                                                st.write(f"**SERP for: {data.get('query2', '')}**")
-                                                for result in data.get('serp2_results', [])[:10]:
-                                                    if result['is_client']:
-                                                        st.success(f"{result['position']}. **[YOUR SITE]** {result['title'][:50]}...")
-                                                        st.caption(f"   {result['url'][:60]}...")
-                                                    else:
-                                                        st.write(f"{result['position']}. {result['title'][:50]}...")
-                                                        st.caption(f"   {result['domain']}")
-                                            
-                                            if data['overlap_percentage'] >= serp_overlap_threshold:
-                                                st.error(f"⚠️ Critical: Same search intent - consider consolidating content")
-                                            else:
-                                                st.info("ℹ️ Below threshold but worth monitoring")
-                                
-                                # Download button for content report (only show if results exist)
-                                if results:
-                                    st.divider()
-                                    report = generate_content_report(results)
-                                    st.download_button(
-                                        label="📥 Download Content Analysis Report (Markdown)",
-                                        data=report,
-                                        file_name=f"content_cannibalization_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
-                                        mime="text/markdown",
-                                        use_container_width=True,
-                                        key="download_content_btn"
-                                    )
-                            else:
-                                st.error(f"❌ {results.get('error', 'Unknown error')}")
+                                if data['overlap_percentage'] >= serp_overlap_threshold:
+                                    st.error(f"⚠️ Critical: Same search intent - consider consolidating content")
+                                else:
+                                    st.info("ℹ️ Below threshold but worth monitoring")
+                    
+                    # Download button - always available when results exist
+                    st.divider()
+                    st.download_button(
+                        label="📥 Download Content Analysis Report (Markdown)",
+                        data=generate_content_report(results),
+                        file_name=f"content_cannibalization_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
+                        mime="text/markdown",
+                        use_container_width=True,
+                        key="download_content_final"
+                    )
+                else:
+                    st.error(f"❌ {results.get('error', 'Unknown error')}")
                                 
                         except Exception as e:
                             st.error(f"Error during analysis: {str(e)}")
@@ -2433,80 +2440,82 @@ def main():
                         similarity_threshold
                     )
                     st.session_state['topic_results'] = results
+            
+            # Display results if they exist in session state
+            if 'topic_results' in st.session_state:
+                results = st.session_state['topic_results']
+                
+                if 'error' not in results:
+                    # Display severity
+                    severity = results.get('severity_info', {})
+                    st.markdown(f"<div class='severity-{severity.get('severity', '').lower()}'>{severity.get('color', '')} {severity.get('severity', 'Unknown')} SEVERITY - {severity.get('impact', '')}</div>", unsafe_allow_html=True)
                     
-                    if 'error' not in results:
-                        # Display severity
-                        severity = results.get('severity_info', {})
-                        st.markdown(f"<div class='severity-{severity.get('severity', '').lower()}'>{severity.get('color', '')} {severity.get('severity', 'Unknown')} SEVERITY - {severity.get('impact', '')}</div>", unsafe_allow_html=True)
-                        
-                        # Display metrics
-                        col1, col2, col3, col4 = st.columns(4)
-                        with col1:
-                            st.metric("Total Pages", results['total_pages'])
-                        with col2:
-                            st.metric("Pages with Issues", results['pages_with_high_similarity'])
-                        with col3:
-                            st.metric("Similarity Pairs", results['total_similarity_pairs'])
-                        with col4:
-                            st.metric("Avg Similarity", f"{results['average_similarity']:.3f}")
-                        
-                        st.info(f"Embedding dimension: {results.get('embedding_dimension', 'N/A')}")
-                        
-                        # Top similar pairs
-                        if results.get('high_similarity_pairs'):
-                            st.subheader("🔥 Highly Similar Pages (Excluding Same Normalized URLs)")
-                            for i, pair in enumerate(results['high_similarity_pairs'][:10], 1):
-                                similarity_pct = pair['similarity'] * 100
-                                with st.expander(f"Pair #{i}: {similarity_pct:.1f}% Similar"):
-                                    col1, col2 = st.columns(2)
-                                    with col1:
-                                        st.write("**Page 1:**")
-                                        st.code(pair['page1'])
-                                        if pair.get('normalized_page1'):
-                                            st.caption(f"Normalized: {pair['normalized_page1'][:80]}...")
-                                    with col2:
-                                        st.write("**Page 2:**")
-                                        st.code(pair['page2'])
-                                        if pair.get('normalized_page2'):
-                                            st.caption(f"Normalized: {pair['normalized_page2'][:80]}...")
-                                    
-                                    if pair['similarity'] > 0.95:
-                                        st.error("⚠️ Critical: These pages are nearly identical - merge immediately")
-                                    elif pair['similarity'] > 0.9:
-                                        st.warning("⚠️ High: Strong candidate for consolidation")
-                                    else:
-                                        st.info("ℹ️ Moderate: Consider content differentiation")
-                        
-                        # Similarity distribution
-                        if len(results.get('similarity_matrix', pd.DataFrame()).values) > 0:
-                            st.subheader("📊 Similarity Distribution")
-                            sim_values = results['similarity_matrix'].values[
-                                np.triu_indices_from(results['similarity_matrix'].values, k=1)
-                            ]
-                            fig = px.histogram(
-                                x=sim_values,
-                                nbins=30,
-                                title="Distribution of Semantic Similarities Between Pages",
-                                labels={'x': 'Similarity Score', 'y': 'Number of Page Pairs'}
-                            )
-                            fig.add_vline(x=similarity_threshold, line_dash="dash", line_color="red",
-                                        annotation_text=f"Threshold: {similarity_threshold}")
-                            st.plotly_chart(fig, use_container_width=True)
-                        
-                        # Download button for topic report (only show if results exist)
-                        if results:
-                            st.divider()
-                            report = generate_topic_report(results)
-                            st.download_button(
-                                label="📥 Download Topic Analysis Report (Markdown)",
-                                data=report,
-                                file_name=f"topic_cannibalization_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
-                                mime="text/markdown",
-                                use_container_width=True,
-                                key="download_topic_btn"
-                            )
-                    else:
-                        st.error(f"❌ {results.get('error', 'Unknown error')}")
+                    # Display metrics
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.metric("Total Pages", results['total_pages'])
+                    with col2:
+                        st.metric("Pages with Issues", results['pages_with_high_similarity'])
+                    with col3:
+                        st.metric("Similarity Pairs", results['total_similarity_pairs'])
+                    with col4:
+                        st.metric("Avg Similarity", f"{results['average_similarity']:.3f}")
+                    
+                    st.info(f"Embedding dimension: {results.get('embedding_dimension', 'N/A')}")
+                    
+                    # Top similar pairs
+                    if results.get('high_similarity_pairs'):
+                        st.subheader("🔥 Highly Similar Pages (Excluding Same Normalized URLs)")
+                        for i, pair in enumerate(results['high_similarity_pairs'][:10], 1):
+                            similarity_pct = pair['similarity'] * 100
+                            with st.expander(f"Pair #{i}: {similarity_pct:.1f}% Similar"):
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    st.write("**Page 1:**")
+                                    st.code(pair['page1'])
+                                    if pair.get('normalized_page1'):
+                                        st.caption(f"Normalized: {pair['normalized_page1'][:80]}...")
+                                with col2:
+                                    st.write("**Page 2:**")
+                                    st.code(pair['page2'])
+                                    if pair.get('normalized_page2'):
+                                        st.caption(f"Normalized: {pair['normalized_page2'][:80]}...")
+                                
+                                if pair['similarity'] > 0.95:
+                                    st.error("⚠️ Critical: These pages are nearly identical - merge immediately")
+                                elif pair['similarity'] > 0.9:
+                                    st.warning("⚠️ High: Strong candidate for consolidation")
+                                else:
+                                    st.info("ℹ️ Moderate: Consider content differentiation")
+                    
+                    # Similarity distribution
+                    if len(results.get('similarity_matrix', pd.DataFrame()).values) > 0:
+                        st.subheader("📊 Similarity Distribution")
+                        sim_values = results['similarity_matrix'].values[
+                            np.triu_indices_from(results['similarity_matrix'].values, k=1)
+                        ]
+                        fig = px.histogram(
+                            x=sim_values,
+                            nbins=30,
+                            title="Distribution of Semantic Similarities Between Pages",
+                            labels={'x': 'Similarity Score', 'y': 'Number of Page Pairs'}
+                        )
+                        fig.add_vline(x=similarity_threshold, line_dash="dash", line_color="red",
+                                    annotation_text=f"Threshold: {similarity_threshold}")
+                        st.plotly_chart(fig, use_container_width=True)
+                    
+                    # Download button - always available when results exist
+                    st.divider()
+                    st.download_button(
+                        label="📥 Download Topic Analysis Report (Markdown)",
+                        data=generate_topic_report(results),
+                        file_name=f"topic_cannibalization_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
+                        mime="text/markdown",
+                        use_container_width=True,
+                        key="download_topic_final"
+                    )
+                else:
+                    st.error(f"❌ {results.get('error', 'Unknown error')}")
         else:
             st.info("📤 Please upload an embeddings file in the Data Upload tab")
     
@@ -2616,7 +2625,7 @@ def main():
                     st.session_state.get('keyword_results', {}),
                     st.session_state.get('content_results', {}),
                     st.session_state.get('topic_results', {}),
-                    ai_provider,
+                    ai_provider.provider if ai_provider and ai_provider.client else "",
                     ai_recommendations
                 )
                 
@@ -2627,7 +2636,7 @@ def main():
                     mime="text/markdown",
                     type="primary",
                     use_container_width=True,
-                    key="download_complete_analysis_btn"
+                    key="download_complete_final"
                 )
             else:
                 st.info("📊 Run at least one analysis to generate the complete report")
