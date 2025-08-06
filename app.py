@@ -2423,12 +2423,6 @@ def main():
                     )
                 else:
                     st.error(f"❌ {results.get('error', 'Unknown error')}")
-                                
-                        except Exception as e:
-                            st.error(f"Error during analysis: {str(e)}")
-                            st.info("Please check your Serper API key and try again")
-                        finally:
-                            loop.close()
         else:
             st.info("📤 Please upload a GSC report in the Data Upload tab")
     
