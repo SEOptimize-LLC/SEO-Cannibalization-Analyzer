@@ -1,16 +1,11 @@
 """
 SEO Cannibalization Analysis App
-A comprehensive tool for detecting and analyzing keyword, content, and topic cannibalization
+Complete version for Streamlit Cloud deployment
 """
 
 import streamlit as st
 import pandas as pd
 import numpy as np
-from typing import Dict, List, Tuple, Optional
-import requests
-from bs4 import BeautifulSoup
-import time
-from urllib.parse import urlparse, quote
 import json
 import asyncio
 import aiohttp
@@ -18,13 +13,27 @@ from datetime import datetime
 import plotly.express as px
 import plotly.graph_objects as go
 from sklearn.metrics.pairwise import cosine_similarity
+from urllib.parse import urlparse
 import ast
-import os
+from typing import Dict, List, Tuple, Optional
+import time
+import io
 
-# AI Provider Imports
-import openai
-import anthropic
-import google.generativeai as genai
+# AI Provider Imports (optional)
+try:
+    import openai
+except ImportError:
+    openai = None
+
+try:
+    import anthropic
+except ImportError:
+    anthropic = None
+
+try:
+    import google.generativeai as genai
+except ImportError:
+    genai = None
 
 # Configure page
 st.set_page_config(
@@ -61,6 +70,69 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
+
+def validate_gsc_data(df: pd.DataFrame) -> Tuple[bool, str]:
+    """Validate GSC report format"""
+    required_columns = ['Query', 'Landing Page', 'Clicks', 'Impressions']
+    
+    missing_columns = [col for col in required_columns if col not in df.columns]
+    if missing_columns:
+        return False, f"Missing required columns: {', '.join(missing_columns)}"
+    
+    try:
+        df['Clicks'] = pd.to_numeric(df['Clicks'])
+        df['Impressions'] = pd.to_numeric(df['Impressions'])
+    except:
+        return False, "Clicks and Impressions must be numeric"
+    
+    if df.empty:
+        return False, "DataFrame is empty"
+    
+    return True, "Data validation successful"
+
+def validate_embeddings_data(df: pd.DataFrame) -> Tuple[bool, str]:
+    """Validate embeddings file format"""
+    if 'Address' not in df.columns:
+        return False, "Missing 'Address' column"
+    
+    embeddings_cols = [col for col in df.columns if 'embedding' in col.lower()]
+    if not embeddings_cols:
+        return False, "No embeddings column found"
+    
+    return True, "Embeddings data validation successful"
+
+def calculate_potential_impact(keyword_overlap: int, content_overlap: int, topic_similarity: int) -> Dict:
+    """Calculate potential traffic impact of fixing cannibalization"""
+    severity = min(100, (keyword_overlap * 2) + (content_overlap * 1.5) + (topic_similarity * 3))
+    
+    if severity > 70:
+        traffic_increase = "50-110%"
+        ranking_improvement = "3-5 positions"
+        priority = "Critical"
+    elif severity > 40:
+        traffic_increase = "25-50%"
+        ranking_improvement = "2-3 positions"
+        priority = "High"
+    else:
+        traffic_increase = "10-25%"
+        ranking_improvement = "1-2 positions"
+        priority = "Medium"
+    
+    return {
+        'severity_score': severity,
+        'estimated_traffic_increase': traffic_increase,
+        'expected_ranking_improvement': ranking_improvement,
+        'priority_level': priority,
+        'estimated_time_to_fix': f"{severity // 10} weeks"
+    }
+
+# ============================================================================
+# AI PROVIDER CLASS
+# ============================================================================
+
 class AIProvider:
     """Handles AI model interactions for analysis and recommendations"""
     
@@ -69,20 +141,22 @@ class AIProvider:
         self.model = None
         self.client = None
     
-    def setup(self, provider: str, api_key: str, model: str):
+    def setup(self, provider: str, api_key: str, model: str) -> bool:
         """Initialize AI provider with API key"""
         self.provider = provider
         self.model = model
         
         try:
-            if provider == "OpenAI":
+            if provider == "OpenAI" and openai:
                 openai.api_key = api_key
                 self.client = openai
-            elif provider == "Anthropic":
+            elif provider == "Anthropic" and anthropic:
                 self.client = anthropic.Anthropic(api_key=api_key)
-            elif provider == "Google":
+            elif provider == "Google" and genai:
                 genai.configure(api_key=api_key)
                 self.client = genai.GenerativeModel(model)
+            else:
+                return False
         except Exception as e:
             st.error(f"Failed to initialize {provider}: {str(e)}")
             return False
@@ -123,7 +197,7 @@ class AIProvider:
         prompt = prompts.get(analysis_type, prompts["keyword"])
         
         try:
-            if self.provider == "OpenAI":
+            if self.provider == "OpenAI" and openai:
                 response = openai.ChatCompletion.create(
                     model=self.model,
                     messages=[{"role": "user", "content": prompt}],
@@ -132,7 +206,7 @@ class AIProvider:
                 )
                 return response.choices[0].message.content
                 
-            elif self.provider == "Anthropic":
+            elif self.provider == "Anthropic" and anthropic:
                 response = self.client.messages.create(
                     model=self.model,
                     max_tokens=1000,
@@ -140,18 +214,24 @@ class AIProvider:
                 )
                 return response.content[0].text
                 
-            elif self.provider == "Google":
+            elif self.provider == "Google" and genai:
                 response = self.client.generate_content(prompt)
                 return response.text
                 
         except Exception as e:
             return f"AI Analysis Error: {str(e)}"
+        
+        return "AI provider not configured properly"
+
+# ============================================================================
+# ANALYZER CLASSES
+# ============================================================================
 
 class KeywordCannibalizationAnalyzer:
     """Analyzes keyword overlap between URLs"""
     
     @staticmethod
-    def analyze(df: pd.DataFrame) -> Dict:
+    def analyze(df: pd.DataFrame, threshold: float = 10) -> Dict:
         """Analyze keyword overlap between landing pages"""
         
         # Group by landing page
@@ -164,7 +244,7 @@ class KeywordCannibalizationAnalyzer:
         
         for i, page1 in enumerate(pages):
             for j, page2 in enumerate(pages):
-                if i < j:  # Only calculate upper triangle
+                if i < j:
                     keywords1 = set(page_keywords[page1])
                     keywords2 = set(page_keywords[page2])
                     
@@ -174,10 +254,10 @@ class KeywordCannibalizationAnalyzer:
                     overlap_matrix.loc[page1, page2] = overlap_pct
                     overlap_matrix.loc[page2, page1] = overlap_pct
                     
-                    if overlap_pct > 10:  # Threshold for significant overlap
+                    if overlap_pct > threshold:
                         overlap_details[f"{page1[:50]}...||{page2[:50]}..."] = {
                             "overlap_percentage": round(overlap_pct, 2),
-                            "shared_keywords": list(overlap)[:20],  # Limit to top 20
+                            "shared_keywords": list(overlap)[:20],
                             "total_shared": len(overlap),
                             "page1_total": len(keywords1),
                             "page2_total": len(keywords2)
@@ -213,8 +293,8 @@ class ContentCannibalizationAnalyzer:
         payload = {
             'q': query,
             'num': num_results,
-            'gl': 'us',  # Country code
-            'hl': 'en'   # Language
+            'gl': 'us',
+            'hl': 'en'
         }
         
         try:
@@ -222,7 +302,6 @@ class ContentCannibalizationAnalyzer:
                 if response.status == 200:
                     data = await response.json()
                     
-                    # Extract organic results
                     results = {
                         'domains': [],
                         'urls': [],
@@ -241,11 +320,9 @@ class ContentCannibalizationAnalyzer:
                     
                     return results
                 else:
-                    st.warning(f"Serper API error for '{query}': Status {response.status}")
                     return {'domains': [], 'urls': [], 'titles': [], 'positions': []}
                     
         except Exception as e:
-            st.warning(f"Failed to fetch SERP for '{query}': {str(e)}")
             return {'domains': [], 'urls': [], 'titles': [], 'positions': []}
     
     @staticmethod
@@ -267,7 +344,7 @@ class ContentCannibalizationAnalyzer:
             for query in queries:
                 tasks.append(ContentCannibalizationAnalyzer.fetch_serp(session, query, api_key))
             
-            # Add rate limiting to avoid hitting API limits
+            # Batch processing with rate limiting
             batch_size = 10
             all_results = []
             
@@ -276,9 +353,8 @@ class ContentCannibalizationAnalyzer:
                 batch_results = await asyncio.gather(*batch)
                 all_results.extend(batch_results)
                 
-                # Add delay between batches to respect rate limits
                 if i + batch_size < len(tasks):
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(1)  # Rate limiting
             
             for query, serp_result in zip(queries, all_results):
                 if serp_result and serp_result['domains']:
@@ -295,18 +371,16 @@ class ContentCannibalizationAnalyzer:
                     overlap = set(serp1).intersection(set(serp2))
                     overlap_pct = len(overlap) / max(len(set(serp1).union(set(serp2))), 1) * 100
                     
-                    if overlap_pct > 30:  # Significant SERP overlap threshold
+                    if overlap_pct > 30:
                         key = f"{query1}||{query2}"
                         
-                        # Get position-weighted overlap score
                         position_score = 0
                         if query1 in detailed_results and query2 in detailed_results:
                             for domain in overlap:
-                                # Find positions of shared domain in both SERPs
-                                pos1 = serp1.index(domain) + 1 if domain in serp1 else 10
-                                pos2 = serp2.index(domain) + 1 if domain in serp2 else 10
-                                # Higher score for domains appearing higher in both SERPs
-                                position_score += (11 - pos1) * (11 - pos2) / 100
+                                if domain in serp1 and domain in serp2:
+                                    pos1 = serp1.index(domain) + 1
+                                    pos2 = serp2.index(domain) + 1
+                                    position_score += (11 - pos1) * (11 - pos2) / 100
                         
                         overlap_matrix[key] = {
                             "overlap_percentage": round(overlap_pct, 2),
@@ -317,7 +391,6 @@ class ContentCannibalizationAnalyzer:
                             "competition_level": "High" if overlap_pct > 60 else "Medium" if overlap_pct > 40 else "Low"
                         }
             
-            # Store individual query metrics
             if query1 in detailed_results:
                 query_metrics[query1] = {
                     "total_results": len(serp_data.get(query1, [])),
@@ -330,7 +403,7 @@ class ContentCannibalizationAnalyzer:
                                  key=lambda x: x[1]['overlap_percentage'], 
                                  reverse=True)[:20])
         
-        # Calculate competition clusters (queries that frequently overlap)
+        # Find competition clusters
         competition_clusters = []
         processed_queries = set()
         
@@ -338,7 +411,6 @@ class ContentCannibalizationAnalyzer:
             q1, q2 = key.split('||')
             if q1 not in processed_queries:
                 cluster = {q1, q2}
-                # Find other queries that overlap with both
                 for other_key, other_data in overlap_matrix.items():
                     other_q1, other_q2 = other_key.split('||')
                     if other_q1 in cluster or other_q2 in cluster:
@@ -355,8 +427,8 @@ class ContentCannibalizationAnalyzer:
             "top_overlaps": top_overlaps,
             "average_overlap": np.mean([v['overlap_percentage'] for v in overlap_matrix.values()]) if overlap_matrix else 0,
             "query_metrics": query_metrics,
-            "competition_clusters": competition_clusters[:5],  # Top 5 clusters
-            "api_credits_used": len(serp_data)  # Track API usage
+            "competition_clusters": competition_clusters[:5],
+            "api_credits_used": len(serp_data)
         }
 
 class TopicCannibalizationAnalyzer:
@@ -366,14 +438,11 @@ class TopicCannibalizationAnalyzer:
     def parse_embeddings(embeddings_str: str) -> np.ndarray:
         """Parse embedding string to numpy array"""
         try:
-            # Try to parse as JSON first
             embeddings = json.loads(embeddings_str)
         except:
             try:
-                # Try to parse as Python literal
                 embeddings = ast.literal_eval(embeddings_str)
             except:
-                # If all else fails, try to extract numbers
                 import re
                 numbers = re.findall(r'-?\d+\.?\d*', embeddings_str)
                 embeddings = [float(n) for n in numbers]
@@ -381,22 +450,29 @@ class TopicCannibalizationAnalyzer:
         return np.array(embeddings)
     
     @staticmethod
-    def analyze(df: pd.DataFrame) -> Dict:
+    def analyze(df: pd.DataFrame, threshold: float = 0.8) -> Dict:
         """Analyze semantic similarity between pages"""
         
-        # Parse embeddings
         embeddings_list = []
         valid_pages = []
         
+        # Find embeddings column
+        embeddings_col = None
+        for col in df.columns:
+            if 'embedding' in col.lower():
+                embeddings_col = col
+                break
+        
+        if not embeddings_col:
+            return {"error": "No embeddings column found"}
+        
         for idx, row in df.iterrows():
             try:
-                embedding = TopicCannibalizationAnalyzer.parse_embeddings(
-                    row['(ChatGPT) Extract embeddings from page content 1']
-                )
+                embedding = TopicCannibalizationAnalyzer.parse_embeddings(row[embeddings_col])
                 embeddings_list.append(embedding)
                 valid_pages.append(row['Address'])
             except Exception as e:
-                st.warning(f"Failed to parse embedding for {row['Address']}: {str(e)}")
+                continue
         
         if len(embeddings_list) < 2:
             return {"error": "Not enough valid embeddings to analyze"}
@@ -411,35 +487,36 @@ class TopicCannibalizationAnalyzer:
         for i in range(len(valid_pages)):
             for j in range(i + 1, len(valid_pages)):
                 similarity = similarity_matrix[i, j]
-                if similarity > 0.8:  # High similarity threshold
+                if similarity > threshold:
                     high_similarity_pairs.append({
                         "page1": valid_pages[i],
                         "page2": valid_pages[j],
                         "similarity": round(float(similarity), 3)
                     })
         
-        # Sort by similarity
         high_similarity_pairs.sort(key=lambda x: x['similarity'], reverse=True)
         
-        # Create similarity DataFrame for visualization
         sim_df = pd.DataFrame(similarity_matrix, 
                             index=valid_pages, 
                             columns=valid_pages)
         
         return {
             "similarity_matrix": sim_df,
-            "high_similarity_pairs": high_similarity_pairs[:20],  # Top 20
+            "high_similarity_pairs": high_similarity_pairs[:20],
             "total_pages": len(valid_pages),
             "pages_with_high_similarity": len(high_similarity_pairs),
             "average_similarity": float(np.mean(similarity_matrix[np.triu_indices_from(similarity_matrix, k=1)]))
         }
 
+# ============================================================================
+# REPORT GENERATION
+# ============================================================================
+
 def generate_comprehensive_report(keyword_results: Dict, content_results: Dict, 
                                  topic_results: Dict, ai_provider: AIProvider) -> str:
     """Generate comprehensive analysis report"""
     
-    report = f"""
-# SEO Cannibalization Analysis Report
+    report = f"""# SEO Cannibalization Analysis Report
 Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 ## Executive Summary
@@ -447,12 +524,13 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 ### 1. Keyword Cannibalization
 - **Pages Analyzed:** {keyword_results.get('total_pages_analyzed', 0)}
 - **Pages with Overlap:** {keyword_results.get('pages_with_overlap', 0)}
-- **Severity Level:** {'High' if keyword_results.get('pages_with_overlap', 0) > 10 else 'Medium' if keyword_results.get('pages_with_overlap', 0) > 5 else 'Low'}
+- **Severity:** {'High' if keyword_results.get('pages_with_overlap', 0) > 10 else 'Medium' if keyword_results.get('pages_with_overlap', 0) > 5 else 'Low'}
 
 ### 2. Content/SERP Cannibalization
 - **Queries Analyzed:** {content_results.get('total_queries_analyzed', 0)}
 - **Queries with SERP Overlap:** {content_results.get('queries_with_overlap', 0)}
 - **Average SERP Overlap:** {content_results.get('average_overlap', 0):.1f}%
+- **API Credits Used:** {content_results.get('api_credits_used', 0)}
 
 ### 3. Topic/Semantic Cannibalization
 - **Pages Analyzed:** {topic_results.get('total_pages', 0)}
@@ -464,7 +542,6 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 ### Keyword Cannibalization Issues
 """
     
-    # Add top keyword overlaps
     if keyword_results.get('top_issues'):
         for pages, data in list(keyword_results['top_issues'].items())[:5]:
             page1, page2 = pages.split('||')
@@ -475,11 +552,14 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 - Sample Keywords: {', '.join(data['shared_keywords'][:5])}
 """
     
-    # Add AI recommendations if available
+    if content_results.get('competition_clusters'):
+        report += "\n### Competition Clusters\n"
+        for i, cluster in enumerate(content_results['competition_clusters'], 1):
+            report += f"\n**Cluster {i}:** {', '.join(cluster[:5])}\n"
+    
     if ai_provider.client:
         report += "\n## AI-Powered Recommendations\n"
         
-        # Keyword recommendations
         if keyword_results.get('top_issues'):
             report += "\n### Keyword Cannibalization Fixes\n"
             report += ai_provider.generate_analysis(
@@ -487,7 +567,6 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                 "keyword"
             )
         
-        # Content recommendations
         if content_results.get('top_overlaps'):
             report += "\n### Content Cannibalization Fixes\n"
             report += ai_provider.generate_analysis(
@@ -495,7 +574,6 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                 "content"
             )
         
-        # Topic recommendations
         if topic_results.get('high_similarity_pairs'):
             report += "\n### Topic Cannibalization Fixes\n"
             report += ai_provider.generate_analysis(
@@ -503,7 +581,22 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                 "topic"
             )
     
-    report += """
+    # Calculate potential impact
+    impact = calculate_potential_impact(
+        keyword_results.get('pages_with_overlap', 0),
+        content_results.get('queries_with_overlap', 0),
+        topic_results.get('pages_with_high_similarity', 0)
+    )
+    
+    report += f"""
+
+## Expected Impact
+
+- **Priority Level:** {impact['priority_level']}
+- **Traffic Increase Potential:** {impact['estimated_traffic_increase']}
+- **Ranking Improvement:** {impact['expected_ranking_improvement']}
+- **Estimated Time to Fix:** {impact['estimated_time_to_fix']}
+- **Severity Score:** {impact['severity_score']}/100
 
 ## Implementation Roadmap
 
@@ -521,14 +614,13 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 1. Track ranking improvements
 2. Monitor traffic changes
 3. Adjust strategy based on results
-
-## Expected Impact
-- **Traffic Increase:** 25-110% based on severity
-- **Ranking Improvement:** 2-5 positions for cannibalized keywords
-- **CTR Improvement:** 10-30% for consolidated pages
 """
     
     return report
+
+# ============================================================================
+# MAIN APPLICATION
+# ============================================================================
 
 def main():
     st.title("🔍 SEO Cannibalization Analyzer")
@@ -540,8 +632,11 @@ def main():
     # Check for API keys in secrets
     try:
         serper_api_key_secret = st.secrets.get("api_keys", {}).get("serper_key", "")
+        openai_secret = st.secrets.get("api_keys", {}).get("openai_key", "")
+        anthropic_secret = st.secrets.get("api_keys", {}).get("anthropic_key", "")
+        google_secret = st.secrets.get("api_keys", {}).get("google_key", "")
     except:
-        serper_api_key_secret = ""
+        serper_api_key_secret = openai_secret = anthropic_secret = google_secret = ""
     
     # Sidebar configuration
     with st.sidebar:
@@ -550,13 +645,10 @@ def main():
         # API Keys Section
         st.subheader("🔑 API Keys")
         
-        # Serper API Key (Required for SERP Analysis)
+        # Serper API Key
         if serper_api_key_secret:
             st.success("✅ Serper API loaded from secrets")
             serper_api_key = serper_api_key_secret
-            st.caption("Override with manual input below if needed")
-            
-            # Allow manual override
             manual_serper_key = st.text_input(
                 "Serper API Key (Override)",
                 type="password",
@@ -564,53 +656,34 @@ def main():
             )
             if manual_serper_key:
                 serper_api_key = manual_serper_key
-                st.info("Using manually entered Serper key")
         else:
             serper_api_key = st.text_input(
                 "Serper API Key (Required)",
                 type="password",
-                help="Get your API key from serper.dev - Required for SERP overlap analysis"
+                help="Get your API key from serper.dev"
             )
-            
             if serper_api_key:
                 st.success("✅ Serper API configured")
-            else:
-                st.warning("⚠️ Serper API key required for content analysis")
         
         st.divider()
         
         # AI Provider Selection
-        st.subheader("🤖 AI Provider Settings")
+        st.subheader("🤖 AI Provider (Optional)")
         
-        # Check for AI keys in secrets
-        try:
-            openai_secret = st.secrets.get("api_keys", {}).get("openai_key", "")
-            anthropic_secret = st.secrets.get("api_keys", {}).get("anthropic_key", "")
-            google_secret = st.secrets.get("api_keys", {}).get("google_key", "")
-            
-            # Auto-detect available AI provider from secrets
-            available_providers = ["None"]
-            if openai_secret:
-                available_providers.append("OpenAI")
-            if anthropic_secret:
-                available_providers.append("Anthropic")
-            if google_secret:
-                available_providers.append("Google")
-            
-            if len(available_providers) > 1:
-                st.info(f"Found {len(available_providers)-1} AI provider(s) in secrets")
-        except:
-            openai_secret = anthropic_secret = google_secret = ""
-            available_providers = ["None", "OpenAI", "Anthropic", "Google"]
+        available_providers = ["None"]
+        if openai and openai_secret:
+            available_providers.append("OpenAI")
+        if anthropic and anthropic_secret:
+            available_providers.append("Anthropic")
+        if genai and google_secret:
+            available_providers.append("Google")
         
-        ai_choice = st.selectbox(
-            "Select AI Provider",
-            available_providers if len(available_providers) > 1 else ["None", "OpenAI", "Anthropic", "Google"]
-        )
+        ai_choice = st.selectbox("Select AI Provider", available_providers)
         
         if ai_choice != "None":
-            # Check if API key exists in secrets
             api_key_from_secret = ""
+            model_options = []
+            
             if ai_choice == "OpenAI":
                 api_key_from_secret = openai_secret
                 model_options = ["gpt-4", "gpt-3.5-turbo"]
@@ -622,19 +695,8 @@ def main():
                 model_options = ["gemini-pro"]
             
             if api_key_from_secret:
-                st.success(f"✅ {ai_choice} API loaded from secrets")
                 api_key = api_key_from_secret
-                st.caption("Override with manual input below if needed")
-                
-                # Allow manual override
-                manual_api_key = st.text_input(
-                    f"{ai_choice} API Key (Override)",
-                    type="password",
-                    help="Leave blank to use key from secrets"
-                )
-                if manual_api_key:
-                    api_key = manual_api_key
-                    st.info("Using manually entered API key")
+                st.success(f"✅ {ai_choice} API loaded from secrets")
             else:
                 api_key = st.text_input(
                     f"{ai_choice} API Key",
@@ -642,13 +704,12 @@ def main():
                     help="Enter your API key for AI-powered recommendations"
                 )
             
-            model = st.selectbox("Model", model_options)
-            
-            if api_key and st.button("Initialize AI"):
-                if ai_provider.setup(ai_choice, api_key, model):
-                    st.success(f"✅ {ai_choice} initialized successfully!")
-                else:
-                    st.error("Failed to initialize AI provider")
+            if model_options:
+                model = st.selectbox("Model", model_options)
+                
+                if api_key and st.button("Initialize AI"):
+                    if ai_provider.setup(ai_choice, api_key, model):
+                        st.success(f"✅ {ai_choice} initialized!")
         
         st.divider()
         
@@ -658,22 +719,22 @@ def main():
         keyword_threshold = st.slider(
             "Keyword Overlap Threshold (%)",
             min_value=5, max_value=50, value=10,
-            help="Minimum overlap percentage to flag as cannibalization"
+            help="Minimum overlap percentage to flag"
         )
         
         serp_sample_size = st.number_input(
             "SERP Analysis Sample Size",
             min_value=10, max_value=100, value=30,
-            help="Number of queries to analyze for SERP overlap"
+            help="Number of queries to analyze"
         )
         
         similarity_threshold = st.slider(
             "Semantic Similarity Threshold",
             min_value=0.5, max_value=1.0, value=0.8, step=0.05,
-            help="Minimum similarity score to flag as topic cannibalization"
+            help="Minimum similarity score to flag"
         )
     
-    # Main content area
+    # Main content tabs
     tab1, tab2, tab3, tab4 = st.tabs(["📊 Data Upload", "🔤 Keyword Analysis", 
                                        "📑 Content Analysis", "🧠 Topic Analysis"])
     
@@ -687,17 +748,22 @@ def main():
             gsc_file = st.file_uploader(
                 "Upload GSC Report CSV",
                 type=['csv'],
-                help="Export from Google Search Console: Performance > Export"
+                help="Export from Google Search Console"
             )
             
             if gsc_file:
                 try:
                     gsc_df = pd.read_csv(gsc_file)
-                    st.success(f"✅ Loaded {len(gsc_df)} rows")
-                    st.dataframe(gsc_df.head(), use_container_width=True)
-                    st.session_state['gsc_df'] = gsc_df
+                    is_valid, message = validate_gsc_data(gsc_df)
+                    
+                    if is_valid:
+                        st.success(f"✅ Loaded {len(gsc_df)} rows")
+                        st.dataframe(gsc_df.head(), use_container_width=True)
+                        st.session_state['gsc_df'] = gsc_df
+                    else:
+                        st.error(f"❌ {message}")
                 except Exception as e:
-                    st.error(f"Error loading GSC file: {str(e)}")
+                    st.error(f"Error loading file: {str(e)}")
         
         with col2:
             st.subheader("Embeddings File")
@@ -710,11 +776,16 @@ def main():
             if embeddings_file:
                 try:
                     embeddings_df = pd.read_csv(embeddings_file)
-                    st.success(f"✅ Loaded {len(embeddings_df)} pages")
-                    st.dataframe(embeddings_df.head(), use_container_width=True)
-                    st.session_state['embeddings_df'] = embeddings_df
+                    is_valid, message = validate_embeddings_data(embeddings_df)
+                    
+                    if is_valid:
+                        st.success(f"✅ Loaded {len(embeddings_df)} pages")
+                        st.dataframe(embeddings_df.head(), use_container_width=True)
+                        st.session_state['embeddings_df'] = embeddings_df
+                    else:
+                        st.error(f"❌ {message}")
                 except Exception as e:
-                    st.error(f"Error loading embeddings file: {str(e)}")
+                    st.error(f"Error loading file: {str(e)}")
     
     with tab2:
         st.header("🔤 Keyword Cannibalization Analysis")
@@ -722,7 +793,10 @@ def main():
         if 'gsc_df' in st.session_state:
             if st.button("Analyze Keyword Overlap", type="primary", key="keyword_btn"):
                 with st.spinner("Analyzing keyword overlap..."):
-                    results = KeywordCannibalizationAnalyzer.analyze(st.session_state['gsc_df'])
+                    results = KeywordCannibalizationAnalyzer.analyze(
+                        st.session_state['gsc_df'], 
+                        keyword_threshold
+                    )
                     st.session_state['keyword_results'] = results
                     
                     # Display metrics
@@ -736,26 +810,22 @@ def main():
                         st.metric("Severity", severity)
                     
                     # Display top issues
-                    st.subheader("Top Cannibalization Issues")
                     if results['top_issues']:
+                        st.subheader("Top Cannibalization Issues")
                         for pages, data in list(results['top_issues'].items())[:5]:
-                            with st.expander(f"📍 {pages.replace('||', ' vs ')[:100]}..."):
-                                col1, col2 = st.columns(2)
-                                with col1:
-                                    st.metric("Overlap %", f"{data['overlap_percentage']}%")
-                                    st.metric("Shared Keywords", data['total_shared'])
-                                with col2:
-                                    st.write("**Sample Shared Keywords:**")
-                                    st.write(", ".join(data['shared_keywords'][:10]))
+                            with st.expander(f"📍 Overlap: {data['overlap_percentage']}%"):
+                                page1, page2 = pages.split('||')
+                                st.write(f"**Page 1:** {page1}")
+                                st.write(f"**Page 2:** {page2}")
+                                st.write(f"**Shared Keywords:** {data['total_shared']}")
+                                st.write(f"**Sample:** {', '.join(data['shared_keywords'][:10])}")
                     
-                    # Heatmap visualization
-                    if len(results['overlap_matrix']) < 20:  # Only show if not too many pages
+                    # Heatmap
+                    if len(results['overlap_matrix']) < 20:
                         st.subheader("Overlap Heatmap")
                         fig = px.imshow(
                             results['overlap_matrix'].fillna(0).values,
                             labels=dict(x="Pages", y="Pages", color="Overlap %"),
-                            x=results['overlap_matrix'].columns[:20],
-                            y=results['overlap_matrix'].index[:20],
                             color_continuous_scale="Reds",
                             aspect="auto"
                         )
@@ -769,19 +839,12 @@ def main():
         
         if 'gsc_df' in st.session_state:
             if not serper_api_key:
-                st.error("🔑 Please enter your Serper API key in the sidebar to run SERP analysis")
-                st.info("Get your API key at [serper.dev](https://serper.dev) - Free tier includes 2,500 queries/month")
-                st.code("""
-# Or add to Streamlit secrets:
-[api_keys]
-serper_key = "your-serper-api-key"
-                """)
+                st.error("🔑 Please enter your Serper API key in the sidebar")
+                st.info("[Get your API key at serper.dev](https://serper.dev)")
             elif st.button("Analyze SERP Overlap", type="primary", key="serp_btn"):
-                with st.spinner(f"Fetching SERPs for top {serp_sample_size} queries using Serper API..."):
-                    # Get unique queries
+                with st.spinner(f"Analyzing top {serp_sample_size} queries..."):
                     queries = st.session_state['gsc_df']['Query'].unique()[:serp_sample_size]
                     
-                    # Run async analysis with Serper API
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
                     results = loop.run_until_complete(
@@ -793,9 +856,7 @@ serper_key = "your-serper-api-key"
                     )
                     st.session_state['content_results'] = results
                     
-                    if 'error' in results:
-                        st.error(results['error'])
-                    else:
+                    if 'error' not in results:
                         # Display metrics
                         col1, col2, col3, col4 = st.columns(4)
                         with col1:
@@ -807,39 +868,26 @@ serper_key = "your-serper-api-key"
                         with col4:
                             st.metric("API Credits Used", results.get('api_credits_used', 0))
                         
-                        # Display competition clusters if found
+                        # Competition clusters
                         if results.get('competition_clusters'):
                             st.subheader("🎯 Competition Clusters")
-                            st.info("Groups of queries competing for similar SERP positions")
                             for i, cluster in enumerate(results['competition_clusters'], 1):
                                 with st.expander(f"Cluster {i} ({len(cluster)} queries)"):
-                                    st.write("**Competing Queries:**")
-                                    for query in cluster[:10]:  # Show max 10 queries per cluster
+                                    for query in cluster[:10]:
                                         st.write(f"• {query}")
                         
-                        # Display top overlaps
-                        st.subheader("Top SERP Overlaps")
+                        # Top overlaps
                         if results['top_overlaps']:
+                            st.subheader("Top SERP Overlaps")
                             for query_pair, data in list(results['top_overlaps'].items())[:10]:
                                 q1, q2 = query_pair.split('||')
-                                with st.expander(f"🔍 '{q1}' vs '{q2}'"):
-                                    col1, col2, col3 = st.columns(3)
-                                    with col1:
-                                        st.metric("SERP Overlap", f"{data['overlap_percentage']}%")
-                                    with col2:
-                                        st.metric("Competition", data.get('competition_level', 'Medium'))
-                                    with col3:
-                                        st.metric("Position Score", data.get('position_weighted_score', 0))
-                                    
-                                    st.write("**Shared Domains:**")
-                                    for domain in data['shared_domains'][:5]:
-                                        st.write(f"• {domain}")
-                        
-                        # Query metrics summary
-                        if results.get('query_metrics'):
-                            st.subheader("📊 Query Performance Insights")
-                            metrics_df = pd.DataFrame(results['query_metrics']).T
-                            st.dataframe(metrics_df.head(20), use_container_width=True)
+                                with st.expander(f"🔍 Overlap: {data['overlap_percentage']}%"):
+                                    st.write(f"**Query 1:** {q1}")
+                                    st.write(f"**Query 2:** {q2}")
+                                    st.write(f"**Competition Level:** {data.get('competition_level', 'Medium')}")
+                                    st.write(f"**Shared Domains:** {', '.join(data['shared_domains'][:5])}")
+                    else:
+                        st.error(results['error'])
         else:
             st.info("📤 Please upload a GSC report in the Data Upload tab")
     
@@ -849,7 +897,10 @@ serper_key = "your-serper-api-key"
         if 'embeddings_df' in st.session_state:
             if st.button("Analyze Semantic Similarity", type="primary", key="topic_btn"):
                 with st.spinner("Calculating semantic similarities..."):
-                    results = TopicCannibalizationAnalyzer.analyze(st.session_state['embeddings_df'])
+                    results = TopicCannibalizationAnalyzer.analyze(
+                        st.session_state['embeddings_df'],
+                        similarity_threshold
+                    )
                     st.session_state['topic_results'] = results
                     
                     if 'error' not in results:
@@ -862,26 +913,22 @@ serper_key = "your-serper-api-key"
                         with col3:
                             st.metric("Avg Similarity", f"{results['average_similarity']:.3f}")
                         
-                        # Display top similar pairs
-                        st.subheader("Highly Similar Page Pairs")
+                        # Top similar pairs
                         if results['high_similarity_pairs']:
+                            st.subheader("Highly Similar Page Pairs")
                             for pair in results['high_similarity_pairs'][:10]:
                                 with st.expander(f"📄 Similarity: {pair['similarity']:.3f}"):
-                                    col1, col2 = st.columns(2)
-                                    with col1:
-                                        st.write("**Page 1:**")
-                                        st.code(pair['page1'])
-                                    with col2:
-                                        st.write("**Page 2:**")
-                                        st.code(pair['page2'])
+                                    st.write(f"**Page 1:** {pair['page1']}")
+                                    st.write(f"**Page 2:** {pair['page2']}")
                         
                         # Similarity distribution
                         st.subheader("Similarity Distribution")
-                        sim_values = results['similarity_matrix'].values[np.triu_indices_from(results['similarity_matrix'].values, k=1)]
+                        sim_values = results['similarity_matrix'].values[
+                            np.triu_indices_from(results['similarity_matrix'].values, k=1)
+                        ]
                         fig = px.histogram(
                             x=sim_values,
                             nbins=30,
-                            title="Distribution of Semantic Similarities",
                             labels={'x': 'Similarity Score', 'y': 'Count'}
                         )
                         st.plotly_chart(fig, use_container_width=True)
@@ -890,33 +937,31 @@ serper_key = "your-serper-api-key"
         else:
             st.info("📤 Please upload an embeddings file in the Data Upload tab")
     
-    # Generate Report Section
+    # Report Generation Section
     st.divider()
     
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        if st.button("📋 Generate Comprehensive Report", type="primary", use_container_width=True):
-            if any(key in st.session_state for key in ['keyword_results', 'content_results', 'topic_results']):
-                with st.spinner("Generating comprehensive report..."):
-                    report = generate_comprehensive_report(
-                        st.session_state.get('keyword_results', {}),
-                        st.session_state.get('content_results', {}),
-                        st.session_state.get('topic_results', {}),
-                        ai_provider
-                    )
-                    
-                    st.markdown("### 📊 Analysis Report")
-                    st.markdown(report)
-                    
-                    # Download button
-                    st.download_button(
-                        label="📥 Download Report",
-                        data=report,
-                        file_name=f"seo_cannibalization_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
-                        mime="text/markdown"
-                    )
-            else:
-                st.warning("Please run at least one analysis before generating the report")
+    if st.button("📋 Generate Comprehensive Report", type="primary", use_container_width=True):
+        if any(key in st.session_state for key in ['keyword_results', 'content_results', 'topic_results']):
+            with st.spinner("Generating report..."):
+                report = generate_comprehensive_report(
+                    st.session_state.get('keyword_results', {}),
+                    st.session_state.get('content_results', {}),
+                    st.session_state.get('topic_results', {}),
+                    ai_provider
+                )
+                
+                st.markdown("### 📊 Analysis Report")
+                st.markdown(report)
+                
+                # Download button
+                st.download_button(
+                    label="📥 Download Report",
+                    data=report,
+                    file_name=f"seo_cannibalization_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
+                    mime="text/markdown"
+                )
+        else:
+            st.warning("Please run at least one analysis before generating the report")
 
 if __name__ == "__main__":
     main()
