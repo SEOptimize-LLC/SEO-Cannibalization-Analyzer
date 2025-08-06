@@ -143,7 +143,7 @@ def normalize_url(url: str) -> str:
         
         # Remove common tracking parameters that don't affect content
         tracking_params = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 
-                          'utm_content', 'fbclid', 'gclid', 'msclkid', '_ga']
+                           'utm_content', 'fbclid', 'gclid', 'msclkid', '_ga']
         for param in tracking_params:
             query_params.pop(param, None)
         
@@ -244,7 +244,7 @@ def calculate_severity(pages_affected: int, overlap_percentage: float, issue_typ
             color = "🟢"
     
     elif issue_type == "content":
-        if overlap_percentage > 65:  # Updated threshold per user request
+        if overlap_percentage > 65: # Updated threshold per user request
             severity = "CRITICAL"
             impact = "Severe SERP competition"
             priority = "Immediate content differentiation needed"
@@ -265,7 +265,7 @@ def calculate_severity(pages_affected: int, overlap_percentage: float, issue_typ
             priority = "Monitor performance"
             color = "🟢"
     
-    else:  # topic
+    else: # topic
         if pages_affected > 10 or overlap_percentage > 0.9:
             severity = "CRITICAL"
             impact = "Severe topic dilution"
@@ -418,14 +418,14 @@ class KeywordCannibalizationAnalyzer:
         df_agg = df_clean.groupby(['Normalized_URL', 'Query']).agg({
             'Clicks': 'sum',
             'Impressions': 'sum',
-            'Landing Page': 'first'  # Keep original URL for display
+            'Landing Page': 'first' # Keep original URL for display
         }).reset_index()
         
         # Filter by minimum clicks if specified
         if min_clicks > 0:
             df_filtered = df_agg[df_agg['Clicks'] >= min_clicks]
             if df_filtered.empty:
-                df_filtered = df_agg  # Fall back to all data if no keywords meet criteria
+                df_filtered = df_agg # Fall back to all data if no keywords meet criteria
         else:
             df_filtered = df_agg
         
@@ -498,8 +498,8 @@ class KeywordCannibalizationAnalyzer:
         
         # Sort by total clicks affected (prioritize high-traffic overlaps)
         top_issues = sorted(overlap_details.items(), 
-                          key=lambda x: x[1]['total_clicks_affected'], 
-                          reverse=True)[:15]
+                            key=lambda x: x[1]['total_clicks_affected'], 
+                            reverse=True)[:15]
         
         # Calculate severity
         avg_overlap = np.mean([d['overlap_percentage'] for d in overlap_details.values()]) if overlap_details else 0
@@ -573,7 +573,7 @@ class ContentCannibalizationAnalyzer:
     
     @staticmethod
     async def analyze_serp_overlap(queries_df: pd.DataFrame, api_key: str, sample_size: int = 50, 
-                                  progress_callback=None, min_clicks: int = 1, branded_terms: List[str] = None) -> Dict:
+                                   progress_callback=None, min_clicks: int = 1, branded_terms: List[str] = None) -> Dict:
         """Analyze SERP overlap between queries using Serper API"""
         
         if not api_key:
@@ -672,7 +672,7 @@ class ContentCannibalizationAnalyzer:
                 union = set(serp1).union(set(serp2))
                 overlap_pct = (len(overlap) / len(union)) * 100 if union else 0
                 
-                if overlap_pct > 65:  # Updated threshold per user request
+                if overlap_pct > 65: # Updated threshold per user request
                     queries_with_issues.add(query1)
                     queries_with_issues.add(query2)
                     
@@ -697,7 +697,7 @@ class ContentCannibalizationAnalyzer:
                     
                     if query1 in detailed_results:
                         for idx, (url, title) in enumerate(zip(detailed_results[query1]['urls'], 
-                                                               detailed_results[query1]['titles'])):
+                                                              detailed_results[query1]['titles'])):
                             domain = urlparse(url).netloc
                             is_client = domain.lower() == client_domain if client_domain else False
                             serp1_full.append({
@@ -710,7 +710,7 @@ class ContentCannibalizationAnalyzer:
                     
                     if query2 in detailed_results:
                         for idx, (url, title) in enumerate(zip(detailed_results[query2]['urls'], 
-                                                               detailed_results[query2]['titles'])):
+                                                              detailed_results[query2]['titles'])):
                             domain = urlparse(url).netloc
                             is_client = domain.lower() == client_domain if client_domain else False
                             serp2_full.append({
@@ -748,8 +748,8 @@ class ContentCannibalizationAnalyzer:
         
         # Sort results by overlap percentage descending
         top_overlaps = dict(sorted(overlap_matrix.items(), 
-                                 key=lambda x: x[1]['overlap_percentage'], 
-                                 reverse=True)[:20])
+                                   key=lambda x: x[1]['overlap_percentage'], 
+                                   reverse=True)[:20])
         
         # Calculate severity
         avg_overlap = np.mean([v['overlap_percentage'] for v in overlap_matrix.values()]) if overlap_matrix else 0
@@ -884,8 +884,8 @@ class TopicCannibalizationAnalyzer:
         
         # Create similarity DataFrame
         sim_df = pd.DataFrame(similarity_matrix, 
-                            index=valid_pages, 
-                            columns=valid_pages)
+                              index=valid_pages, 
+                              columns=valid_pages)
         
         # Calculate average (excluding diagonal)
         mask = np.ones_like(similarity_matrix, dtype=bool)
@@ -911,8 +911,8 @@ class TopicCannibalizationAnalyzer:
 # ============================================================================
 
 def generate_comprehensive_report(keyword_results: Dict, content_results: Dict, 
-                                 topic_results: Dict, ai_provider: AIProvider,
-                                 ai_recommendations: Dict = None) -> str:
+                                  topic_results: Dict, ai_provider: AIProvider,
+                                  ai_recommendations: Dict = None) -> str:
     """Generate comprehensive analysis report with real insights"""
     
     # Get severity info
@@ -977,12 +977,10 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         for i, (pages, data) in enumerate(list(keyword_results['top_issues'].items())[:5], 1):
             report += f"""
 **Issue #{i}: {data['overlap_percentage']}% Overlap - {data['total_clicks_affected']:,} Clicks Affected**
-- **Pages Competing:** 
-  - Page 1: `{data.get('page1_full', pages.split('||')[0])[:100]}`
+- **Pages Competing:** - Page 1: `{data.get('page1_full', pages.split('||')[0])[:100]}`
   - Page 2: `{data.get('page2_full', pages.split('||')[1])[:100]}`
 - **Shared Keywords:** {data['total_shared']} keywords
-- **Top Competing Keywords (by clicks):** 
-"""
+- **Top Competing Keywords (by clicks):** """
             for kw, clicks in data.get('shared_keywords_with_clicks', [])[:5]:
                 report += f"  - {kw} ({clicks:,} clicks)\n"
             
@@ -1148,7 +1146,7 @@ Based on the severity of issues found and clicks affected:
 # ============================================================================
 
 def generate_ai_recommendations(keyword_data: Dict, content_data: Dict, 
-                               topic_data: Dict, ai_provider: AIProvider) -> Dict:
+                                topic_data: Dict, ai_provider: AIProvider) -> Dict:
     """Generate comprehensive AI-powered recommendations based on analysis results"""
     
     recommendations = {
@@ -1212,9 +1210,9 @@ def generate_ai_recommendations(keyword_data: Dict, content_data: Dict,
                     "page2_type": page2_type,
                     "action": "Differentiate content focus" if not pages_incompatible else "CANNOT merge - incompatible page types",
                     "reason": f"{overlap_pct}% overlap on {data['total_shared']} keywords" + 
-                             (f" - {page1_type} vs {page2_type} pages" if pages_incompatible else ""),
+                              (f" - {page1_type} vs {page2_type} pages" if pages_incompatible else ""),
                     "strategy": "Re-optimize for different search intents" if not pages_incompatible else 
-                               "Keep pages separate but differentiate keywords",
+                                "Keep pages separate but differentiate keywords",
                     "suggestions": [
                         f"Page 1 ({page1_type}): Target transactional intent for top keywords" if not pages_incompatible else
                         f"Page 1 ({page1_type}): Focus on {page1_type}-specific keywords",
@@ -1309,7 +1307,7 @@ def generate_ai_recommendations(keyword_data: Dict, content_data: Dict,
                     "page_types": [page1_type, page2_type],
                     "similarity": f"{similarity * 100:.1f}%",
                     "action": "Differentiate topic focus" if not pages_incompatible else 
-                             f"CANNOT merge - incompatible page types ({page1_type} vs {page2_type})",
+                              f"CANNOT merge - incompatible page types ({page1_type} vs {page2_type})",
                     "suggestions": [
                         "Target different audience segments" if not pages_incompatible else
                         f"Ensure {page1_type} page focuses on {page1_type}-specific content",
@@ -1395,8 +1393,8 @@ def generate_ai_recommendations(keyword_data: Dict, content_data: Dict,
     return recommendations
 
 def generate_ai_enhanced_recommendations(keyword_data: Dict, content_data: Dict, 
-                                       topic_data: Dict, base_recommendations: Dict,
-                                       ai_provider: AIProvider) -> str:
+                                           topic_data: Dict, base_recommendations: Dict,
+                                           ai_provider: AIProvider) -> str:
     """Generate AI-enhanced recommendations with specific examples"""
     
     # Prepare context for AI
@@ -1815,8 +1813,8 @@ def main():
     
     # Main content tabs
     tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Data Upload", "🔤 Keyword Analysis", 
-                                             "📑 Content Analysis", "🧠 Topic Analysis", 
-                                             "🤖 AI Insights & Recommendations"])
+                                            "📑 Content Analysis", "🧠 Topic Analysis", 
+                                            "🤖 AI Insights & Recommendations"])
     
     with tab1:
         st.header("Upload Your Data")
@@ -2014,7 +2012,6 @@ def main():
                     progress_message = f"Analyzing SERPs for {actual_queries_to_analyze} queries..."
                     
                     with st.spinner(progress_message):
-                    with st.spinner(progress_message):
                         # Progress callback
                         def update_progress(value):
                             progress_bar.progress(int(value))
@@ -2200,7 +2197,7 @@ def main():
                                 labels={'x': 'Similarity Score', 'y': 'Number of Page Pairs'}
                             )
                             fig.add_vline(x=similarity_threshold, line_dash="dash", line_color="red",
-                                        annotation_text=f"Threshold: {similarity_threshold}")
+                                          annotation_text=f"Threshold: {similarity_threshold}")
                             st.plotly_chart(fig, use_container_width=True)
                     else:
                         st.error(f"❌ {results.get('error', 'Unknown error')}")
