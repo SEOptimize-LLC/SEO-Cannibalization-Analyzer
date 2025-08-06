@@ -1,0 +1,83 @@
+# Streamlit UI Configuration
+# Place this file in .streamlit/config.toml
+
+[theme]
+# Primary accent color for interactive elements
+primaryColor = "#FF6B6B"
+
+# Background color for the main content area
+backgroundColor = "#FFFFFF"
+
+# Background color for sidebar and most interactive widgets
+secondaryBackgroundColor = "#F0F2F6"
+
+# Color used for almost all text
+textColor = "#262730"
+
+# Font family for all text in the app, except code blocks
+font = "sans serif"
+
+[server]
+# Max size, in megabytes, for files uploaded with the file_uploader
+maxUploadSize = 200
+
+# Enable/disable CORS protection
+enableCORS = false
+
+# Enable/disable XSS protection for the app
+enableXsrfProtection = true
+
+# Port that the server will listen on
+port = 8501
+
+# The address where the server will listen for client connections
+address = "localhost"
+
+# If false, will attempt to open a browser window on start
+headless = false
+
+# Automatically rerun script when the file is modified on disk
+runOnSave = true
+
+# File size limit for session state
+maxMessageSize = 200
+
+[browser]
+# Internet address where users should point their browsers to connect to the app
+serverAddress = "localhost"
+
+# Port where users should point their browsers to connect to the app
+serverPort = 8501
+
+# Whether to send usage statistics to Streamlit
+gatherUsageStats = false
+
+[runner]
+# Allows you to type a variable or string by itself in a single line of Python code
+magicEnabled = true
+
+# Install a Python tracer to allow you to stop or pause your script at any point
+installTracer = false
+
+# Sets the MPLBACKEND environment variable to Agg inside Streamlit to prevent Python crashing
+fixMatplotlib = true
+
+# Run the Python Garbage Collector after each script run
+postScriptGC = true
+
+[client]
+# Whether to enable st.cache
+caching = true
+
+# If false, makes your Streamlit script not draw to a Streamlit app
+displayEnabled = true
+
+# Controls whether uncaught app exceptions are displayed in the browser
+showErrorDetails = true
+
+# Change the visibility of items in the toolbar
+toolbarMode = "auto"
+
+[deprecation]
+# Set to false to disable the deprecation warning for using Streamlit commands outside the main script
+showPyplotGlobalUse = false
