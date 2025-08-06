@@ -2311,7 +2311,11 @@ def main():
                             
                             if 'error' not in results:
                                 st.session_state['content_results'] = results
-                            
+                                
+                        except Exception as e:
+                            st.error(f"Error during analysis: {str(e)}")
+                            st.info("Please check your Serper API key and try again")
+            
             # Display results if they exist in session state  
             if 'content_results' in st.session_state:
                 results = st.session_state['content_results']
@@ -2423,6 +2427,8 @@ def main():
                         except Exception as e:
                             st.error(f"Error during analysis: {str(e)}")
                             st.info("Please check your Serper API key and try again")
+                        finally:
+                            loop.close()
         else:
             st.info("📤 Please upload a GSC report in the Data Upload tab")
     
