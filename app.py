@@ -85,8 +85,46 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ============================================================================
-# URL NORMALIZATION FUNCTIONS
+# URL NORMALIZATION AND PAGE TYPE DETECTION FUNCTIONS
 # ============================================================================
+
+def detect_page_type(url: str) -> str:
+    """
+    Detect the type of page based on URL patterns and keywords
+    Returns: 'blog', 'service', 'product', 'legal', 'about', 'home', or 'other'
+    """
+    url_lower = url.lower()
+    
+    # Blog patterns
+    blog_patterns = ['/blog/', '/article/', '/post/', '/news/', '/insights/', '/resources/']
+    if any(pattern in url_lower for pattern in blog_patterns):
+        return 'blog'
+    
+    # Service/solution patterns
+    service_patterns = ['/services/', '/solutions/', '/what-we-do/', '/offerings/']
+    if any(pattern in url_lower for pattern in service_patterns):
+        return 'service'
+    
+    # Product patterns
+    product_patterns = ['/product/', '/products/', '/shop/', '/store/', '/item/']
+    if any(pattern in url_lower for pattern in product_patterns):
+        return 'product'
+    
+    # Legal/policy patterns
+    legal_patterns = ['/privacy', '/terms', '/legal/', '/policy', '/disclaimer', '/cookie']
+    if any(pattern in url_lower for pattern in legal_patterns):
+        return 'legal'
+    
+    # About/company patterns
+    about_patterns = ['/about', '/team', '/company', '/who-we-are', '/our-story', '/mission', '/values']
+    if any(pattern in url_lower for pattern in about_patterns):
+        return 'about'
+    
+    # Home page
+    if url_lower.endswith('/') and url_lower.count('/') <= 3:
+        return 'home'
+    
+    return 'other'
 
 def normalize_url(url: str) -> str:
     """
@@ -358,11 +396,22 @@ class KeywordCannibalizationAnalyzer:
     """Analyzes keyword overlap between URLs with click prioritization"""
     
     @staticmethod
-    def analyze(df: pd.DataFrame, threshold: float = 10, min_clicks: int = 1) -> Dict:
+    def analyze(df: pd.DataFrame, threshold: float = 10, min_clicks: int = 1, branded_terms: List[str] = None) -> Dict:
         """Analyze keyword overlap between landing pages with click-based prioritization"""
         
         # Use normalized URLs for comparison
         df_clean = df.drop_duplicates(subset=['Normalized_URL', 'Query'])
+        
+        # Filter out branded terms if provided
+        if branded_terms:
+            # Create a mask for non-branded queries
+            branded_mask = df_clean['Query'].str.lower().apply(
+                lambda x: not any(brand in x for brand in branded_terms)
+            )
+            df_clean = df_clean[branded_mask]
+            branded_queries_removed = (~branded_mask).sum()
+        else:
+            branded_queries_removed = 0
         
         # Aggregate clicks by normalized URL and query
         df_agg = df_clean.groupby(['Normalized_URL', 'Query']).agg({
@@ -469,7 +518,8 @@ class KeywordCannibalizationAnalyzer:
             "average_overlap": avg_overlap,
             "total_clicks_affected": total_clicks_affected,
             "severity_info": severity_info,
-            "filtered_by_clicks": min_clicks > 0
+            "filtered_by_clicks": min_clicks > 0,
+            "branded_queries_removed": branded_queries_removed
         }
 
 class ContentCannibalizationAnalyzer:
@@ -522,11 +572,22 @@ class ContentCannibalizationAnalyzer:
     
     @staticmethod
     async def analyze_serp_overlap(queries_df: pd.DataFrame, api_key: str, sample_size: int = 50, 
-                                  progress_callback=None, min_clicks: int = 1) -> Dict:
+                                  progress_callback=None, min_clicks: int = 1, branded_terms: List[str] = None) -> Dict:
         """Analyze SERP overlap between queries using Serper API"""
         
         if not api_key:
             return {"error": "Serper API key is required for SERP analysis"}
+        
+        # Filter out branded queries if provided
+        if branded_terms:
+            # Create a mask for non-branded queries
+            branded_mask = queries_df['Query'].str.lower().apply(
+                lambda x: not any(brand in x for brand in branded_terms)
+            )
+            queries_df = queries_df[branded_mask]
+            branded_queries_removed = (~branded_mask).sum()
+        else:
+            branded_queries_removed = 0
         
         # Sort queries by total clicks and filter
         query_clicks = queries_df.groupby('Query')['Clicks'].sum().sort_values(ascending=False)
@@ -534,8 +595,11 @@ class ContentCannibalizationAnalyzer:
         if min_clicks > 0:
             query_clicks = query_clicks[query_clicks >= min_clicks]
         
-        # Get top queries by clicks
-        queries = list(query_clicks.index[:sample_size])
+        # Get queries based on sample_size (0 means all)
+        if sample_size == 0:
+            queries = list(query_clicks.index)
+        else:
+            queries = list(query_clicks.index[:sample_size])
         
         if len(queries) < 2:
             return {"error": "Need at least 2 unique queries to analyze overlap"}
@@ -617,7 +681,11 @@ class ContentCannibalizationAnalyzer:
                         "shared_domains": list(overlap)[:10],
                         "total_shared": len(overlap),
                         "position_weighted_score": round(position_score, 2),
-                        "competition_level": "High" if overlap_pct > 65 else "Medium" if overlap_pct > 40 else "Low"
+                        "competition_level": "High" if overlap_pct > 65 else "Medium" if overlap_pct > 40 else "Low",
+                        "competing_urls": {
+                            "query1_urls": detailed_results.get(query1, {}).get('urls', [])[:10],
+                            "query2_urls": detailed_results.get(query2, {}).get('urls', [])[:10]
+                        }
                     }
         
         # Individual query metrics
@@ -649,7 +717,8 @@ class ContentCannibalizationAnalyzer:
             "api_credits_used": len(serp_data),
             "failed_queries": failed_queries,
             "severity_info": severity_info,
-            "selection_criteria": f"Top {sample_size} queries by clicks (min {min_clicks} clicks)"
+            "selection_criteria": f"{'All' if sample_size == 0 else f'Top {sample_size}'} queries by clicks (min {min_clicks} clicks)",
+            "branded_queries_removed": branded_queries_removed
         }
 
 class TopicCannibalizationAnalyzer:
@@ -1047,7 +1116,23 @@ def generate_ai_recommendations(keyword_data: Dict, content_data: Dict,
             overlap_pct = data['overlap_percentage']
             clicks_affected = data.get('total_clicks_affected', 0)
             
-            if overlap_pct > 70 and clicks_affected > 100:
+            # Detect page types
+            page1_type = detect_page_type(data.get('page1_full', ''))
+            page2_type = detect_page_type(data.get('page2_full', ''))
+            
+            # Check if pages are compatible for consolidation
+            incompatible_types = [
+                ('blog', 'service'), ('blog', 'product'), ('service', 'product'),
+                ('legal', 'blog'), ('legal', 'service'), ('legal', 'product'),
+                ('about', 'blog'), ('about', 'service'), ('about', 'product')
+            ]
+            
+            pages_incompatible = (
+                (page1_type, page2_type) in incompatible_types or 
+                (page2_type, page1_type) in incompatible_types
+            )
+            
+            if overlap_pct > 70 and clicks_affected > 100 and not pages_incompatible:
                 # Critical: Immediate consolidation needed
                 recommendations["immediate_actions"].append({
                     "type": "consolidation",
@@ -1065,21 +1150,28 @@ def generate_ai_recommendations(keyword_data: Dict, content_data: Dict,
                         "5. Submit updated sitemap"
                     ]
                 })
-            elif overlap_pct > 50:
-                # High: Content differentiation needed
+            elif overlap_pct > 50 or pages_incompatible:
+                # High: Content differentiation needed (or incompatible page types)
                 recommendations["content_optimization"].append({
                     "type": "differentiation",
-                    "priority": "HIGH",
+                    "priority": "HIGH" if not pages_incompatible else "CRITICAL",
                     "page1": data.get('page1_full', ''),
                     "page2": data.get('page2_full', ''),
-                    "action": "Differentiate content focus",
-                    "reason": f"{overlap_pct}% overlap on {data['total_shared']} keywords",
-                    "strategy": "Re-optimize for different search intents",
+                    "page1_type": page1_type,
+                    "page2_type": page2_type,
+                    "action": "Differentiate content focus" if not pages_incompatible else "CANNOT merge - incompatible page types",
+                    "reason": f"{overlap_pct}% overlap on {data['total_shared']} keywords" + 
+                             (f" - {page1_type} vs {page2_type} pages" if pages_incompatible else ""),
+                    "strategy": "Re-optimize for different search intents" if not pages_incompatible else 
+                               "Keep pages separate but differentiate keywords",
                     "suggestions": [
-                        f"Page 1: Target transactional intent for top keywords",
-                        f"Page 2: Target informational/educational intent",
+                        f"Page 1 ({page1_type}): Target transactional intent for top keywords" if not pages_incompatible else
+                        f"Page 1 ({page1_type}): Focus on {page1_type}-specific keywords",
+                        f"Page 2 ({page2_type}): Target informational/educational intent" if not pages_incompatible else
+                        f"Page 2 ({page2_type}): Focus on {page2_type}-specific keywords",
                         "Use different long-tail variations",
-                        "Update meta titles and descriptions"
+                        "Update meta titles and descriptions",
+                        "Ensure internal linking respects page hierarchy" if pages_incompatible else ""
                     ]
                 })
             elif overlap_pct > 30:
@@ -1117,12 +1209,31 @@ def generate_ai_recommendations(keyword_data: Dict, content_data: Dict,
     if topic_data and topic_data.get('high_similarity_pairs'):
         for pair in topic_data.get('high_similarity_pairs', [])[:5]:
             similarity = pair['similarity']
-            if similarity > 0.95:
+            
+            # Detect page types
+            page1_type = detect_page_type(pair['page1'])
+            page2_type = detect_page_type(pair['page2'])
+            
+            # Check compatibility
+            incompatible_types = [
+                ('blog', 'service'), ('blog', 'product'), ('service', 'product'),
+                ('legal', 'blog'), ('legal', 'service'), ('legal', 'product'),
+                ('about', 'blog'), ('about', 'service'), ('about', 'product')
+            ]
+            
+            pages_incompatible = (
+                (page1_type, page2_type) in incompatible_types or 
+                (page2_type, page1_type) in incompatible_types
+            )
+            
+            if similarity > 0.95 and not pages_incompatible:
                 recommendations["consolidation_candidates"].append({
                     "type": "semantic_merge",
                     "priority": "CRITICAL",
                     "page1": pair['page1'],
                     "page2": pair['page2'],
+                    "page1_type": page1_type,
+                    "page2_type": page2_type,
                     "similarity": f"{similarity * 100:.1f}%",
                     "action": "Immediate consolidation required",
                     "reason": "Near-duplicate content detected",
@@ -1133,17 +1244,22 @@ def generate_ai_recommendations(keyword_data: Dict, content_data: Dict,
                         "4. Update XML sitemap"
                     ]
                 })
-            elif similarity > 0.85:
+            elif similarity > 0.85 or (similarity > 0.75 and pages_incompatible):
                 recommendations["content_optimization"].append({
                     "type": "topic_differentiation",
-                    "priority": "HIGH",
+                    "priority": "HIGH" if not pages_incompatible else "CRITICAL",
                     "pages": [pair['page1'], pair['page2']],
+                    "page_types": [page1_type, page2_type],
                     "similarity": f"{similarity * 100:.1f}%",
-                    "action": "Differentiate topic focus",
+                    "action": "Differentiate topic focus" if not pages_incompatible else 
+                             f"CANNOT merge - incompatible page types ({page1_type} vs {page2_type})",
                     "suggestions": [
-                        "Target different audience segments",
-                        "Focus on different aspects of the topic",
-                        "Use topic clusters approach",
+                        "Target different audience segments" if not pages_incompatible else
+                        f"Ensure {page1_type} page focuses on {page1_type}-specific content",
+                        "Focus on different aspects of the topic" if not pages_incompatible else
+                        f"Ensure {page2_type} page focuses on {page2_type}-specific content",
+                        "Use distinct keyword variations for each page type" if pages_incompatible else
+                        "Use different long-tail keyword variations",
                         "Create clear content hierarchy"
                     ]
                 })
@@ -1174,18 +1290,18 @@ def generate_ai_recommendations(keyword_data: Dict, content_data: Dict,
                 "actions": [
                     "Create keyword mapping document",
                     "Establish content approval process",
-                    "Regular quarterly audits",
-                    "Train content team on cannibalization"
+                    "Define clear page type hierarchies",
+                    "Train content team on cannibalization prevention"
                 ]
             },
             {
-                "strategy": "Develop Topic Clusters",
+                "strategy": "Establish Clear Content Guidelines",
                 "priority": "HIGH",
                 "actions": [
-                    "Identify main pillar topics",
-                    "Create comprehensive pillar pages",
-                    "Develop supporting cluster content",
-                    "Implement strategic internal linking"
+                    "Define unique purpose for each page type",
+                    "Create keyword assignment rules",
+                    "Document internal linking best practices",
+                    "Set up monitoring for new cannibalization"
                 ]
             }
         ]
@@ -1321,9 +1437,13 @@ def display_ai_recommendations(recommendations: Dict):
                     with col1:
                         st.write("**Page 1:**")
                         st.code(action['page1'][:100] + "..." if len(action['page1']) > 100 else action['page1'])
+                        if action.get('page1_type'):
+                            st.caption(f"Type: {action['page1_type']}")
                     with col2:
                         st.write("**Page 2:**")
                         st.code(action.get('page2', '')[:100] + "..." if action.get('page2', '') and len(action.get('page2', '')) > 100 else action.get('page2', ''))
+                        if action.get('page2_type'):
+                            st.caption(f"Type: {action.get('page2_type', 'unknown')}")
                 
                 if action.get('implementation'):
                     st.write("**Implementation Steps:**")
@@ -1359,9 +1479,13 @@ def display_ai_recommendations(recommendations: Dict):
                 with col1:
                     st.write("**Page 1:**")
                     st.code(candidate['page1'][:80] + "...")
+                    if candidate.get('page1_type'):
+                        st.caption(f"Type: {candidate['page1_type']}")
                 with col2:
                     st.write("**Page 2:**")
                     st.code(candidate['page2'][:80] + "...")
+                    if candidate.get('page2_type'):
+                        st.caption(f"Type: {candidate['page2_type']}")
                 
                 st.warning(f"**Reason:** {candidate['reason']}")
                 
@@ -1379,8 +1503,9 @@ def display_ai_recommendations(recommendations: Dict):
             with st.expander(f"{opt['action']} ({opt['priority']} Priority)"):
                 if opt.get('pages'):
                     st.write("**Affected Pages:**")
-                    for page in opt['pages']:
-                        st.write(f"• {page[:100]}...")
+                    for i, page in enumerate(opt['pages']):
+                        page_type = opt.get('page_types', ['', ''])[i] if opt.get('page_types') else ''
+                        st.write(f"• {page[:100]}... ({page_type})" if page_type else f"• {page[:100]}...")
                 
                 if opt.get('suggestions'):
                     st.write("**Optimization Suggestions:**")
@@ -1593,6 +1718,14 @@ def main():
         # Analysis Settings
         st.subheader("Analysis Settings")
         
+        # Branded terms exclusion
+        branded_terms = st.text_area(
+            "Branded Terms to Exclude",
+            placeholder="Enter branded terms (one per line) to exclude from cannibalization analysis",
+            help="Add your brand names, company names, and variations to avoid false positives"
+        )
+        branded_terms_list = [term.strip().lower() for term in branded_terms.split('\n') if term.strip()]
+        
         keyword_threshold = st.slider(
             "Keyword Overlap Threshold (%)",
             min_value=5, max_value=50, value=10,
@@ -1607,8 +1740,8 @@ def main():
         
         serp_sample_size = st.number_input(
             "SERP Analysis Sample Size",
-            min_value=10, max_value=500, value=100,
-            help="Number of top queries (by clicks) to analyze"
+            min_value=0, max_value=5000, value=500,
+            help="Number of top queries (by clicks) to analyze. Set to 0 to analyze ALL queries (may use significant API credits)."
         )
         
         min_clicks_serp = st.number_input(
@@ -1725,7 +1858,8 @@ def main():
                     results = KeywordCannibalizationAnalyzer.analyze(
                         st.session_state['gsc_df'], 
                         keyword_threshold,
-                        min_clicks_keyword
+                        min_clicks_keyword,
+                        branded_terms_list
                     )
                     st.session_state['keyword_results'] = results
                     
@@ -1743,6 +1877,10 @@ def main():
                         st.metric("Overlap Pairs", results['total_overlap_pairs'])
                     with col4:
                         st.metric("Clicks Affected", f"{results['total_clicks_affected']:,}")
+                    
+                    # Show branded terms filtered if any
+                    if results.get('branded_queries_removed', 0) > 0:
+                        st.info(f"ℹ️ Filtered out {results['branded_queries_removed']} queries containing branded terms")
                     
                     # Display top issues
                     if results['top_issues']:
@@ -1795,13 +1933,28 @@ def main():
                     st.session_state['gsc_df']['Clicks'] >= min_clicks_serp
                 ]['Query'].unique())
                 
-                st.info(f"Ready to analyze top {min(serp_sample_size, queries_meeting_threshold)} queries (by clicks) out of {queries_meeting_threshold} queries with ≥{min_clicks_serp} clicks (total: {total_queries} unique queries)")
+                # Consider branded terms filtering
+                if branded_terms_list:
+                    queries_meeting_threshold_after_filter = len(st.session_state['gsc_df'][
+                        (st.session_state['gsc_df']['Clicks'] >= min_clicks_serp) & 
+                        (~st.session_state['gsc_df']['Query'].str.lower().apply(
+                            lambda x: any(brand in x for brand in branded_terms_list)
+                        ))
+                    ]['Query'].unique())
+                    queries_meeting_threshold = queries_meeting_threshold_after_filter
+                
+                if serp_sample_size == 0:
+                    st.warning(f"⚠️ Analyzing ALL {queries_meeting_threshold} queries will use {queries_meeting_threshold} API credits!")
+                    st.info(f"Ready to analyze ALL {queries_meeting_threshold} queries with ≥{min_clicks_serp} clicks (after filtering branded terms)")
+                else:
+                    st.info(f"Ready to analyze top {min(serp_sample_size, queries_meeting_threshold)} queries (by clicks) out of {queries_meeting_threshold} queries with ≥{min_clicks_serp} clicks")
                 
                 if st.button("Analyze SERP Overlap", type="primary", key="serp_btn"):
                     progress_bar = st.progress(0)
                     status_text = st.empty()
                     
-                    with st.spinner(f"Analyzing SERPs for top {min(serp_sample_size, queries_meeting_threshold)} queries..."):
+                    progress_message = f"Analyzing SERPs for {'ALL' if serp_sample_size == 0 else f'top {min(serp_sample_size, queries_meeting_threshold)}'} queries..."
+                    with st.spinner(progress_message):
                         # Progress callback
                         def update_progress(value):
                             progress_bar.progress(int(value))
@@ -1818,7 +1971,8 @@ def main():
                                     serper_api_key,
                                     serp_sample_size,
                                     update_progress,
-                                    min_clicks_serp
+                                    min_clicks_serp,
+                                    branded_terms_list
                                 )
                             )
                             
@@ -1847,6 +2001,10 @@ def main():
                                 if results.get('failed_queries'):
                                     st.warning(f"⚠️ Failed to fetch SERPs for {len(results['failed_queries'])} queries")
                                 
+                                # Branded terms filtered info
+                                if results.get('branded_queries_removed', 0) > 0:
+                                    st.info(f"ℹ️ Filtered out {results['branded_queries_removed']} queries containing branded terms")
+                                
                                 # Top overlaps
                                 if results.get('top_overlaps'):
                                     st.subheader("🔥 Top SERP Overlaps (Sorted by Click Impact)")
@@ -1863,6 +2021,19 @@ def main():
                                             st.write(f"**Shared Domains ({data.get('total_shared', 0)}):**")
                                             for domain in data.get('shared_domains', [])[:5]:
                                                 st.write(f"• {domain}")
+                                            
+                                            # Show competing URLs
+                                            if data.get('competing_urls'):
+                                                st.write("**Competing URLs:**")
+                                                urls_col1, urls_col2 = st.columns(2)
+                                                with urls_col1:
+                                                    st.write(f"*URLs for '{data.get('query1', '')}'*")
+                                                    for url in data['competing_urls'].get('query1_urls', [])[:5]:
+                                                        st.code(url[:80] + "..." if len(url) > 80 else url)
+                                                with urls_col2:
+                                                    st.write(f"*URLs for '{data.get('query2', '')}'*")
+                                                    for url in data['competing_urls'].get('query2_urls', [])[:5]:
+                                                        st.code(url[:80] + "..." if len(url) > 80 else url)
                                             
                                             st.write(f"**Position Score:** {data.get('position_weighted_score', 0)}")
                                             
@@ -2043,7 +2214,7 @@ def main():
             elif 'ai_recommendations' in st.session_state:
                 display_ai_recommendations(st.session_state['ai_recommendations'])
     
-    # Report Generation Section
+    # Report Generation Section (only at the bottom)
     st.divider()
     
     # Check if any analysis has been run
@@ -2054,37 +2225,11 @@ def main():
     ])
     
     if has_results:
-        col1, col2, col3 = st.columns([1, 2, 1])
-        with col2:
-            if st.button("📋 Generate Comprehensive Report", type="primary", use_container_width=True):
-                with st.spinner("Generating comprehensive report with insights..."):
-                    # Include AI recommendations if available
-                    ai_recommendations = st.session_state.get('ai_recommendations', {})
-                    
-                    report = generate_comprehensive_report(
-                        st.session_state.get('keyword_results', {}),
-                        st.session_state.get('content_results', {}),
-                        st.session_state.get('topic_results', {}),
-                        ai_provider,
-                        ai_recommendations
-                    )
-                    
-                    st.markdown("### 📊 Complete Analysis Report")
-                    
-                    # Display report in expandable section
-                    with st.expander("View Full Report", expanded=True):
-                        st.markdown(report)
-                    
-                    # Download button
-                    st.download_button(
-                        label="📥 Download Report (Markdown)",
-                        data=report,
-                        file_name=f"seo_cannibalization_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
-                        mime="text/markdown",
-                        use_container_width=True
-                    )
+        # AI Insights reminder
+        if 'ai_recommendations' not in st.session_state:
+            st.info("💡 Don't forget to check the **AI Insights & Recommendations** tab for actionable fixes!")
     else:
-        st.info("📊 Run at least one analysis to generate a report")
+        st.info("📊 Run at least one analysis to generate insights")
 
 if __name__ == "__main__":
     main()
