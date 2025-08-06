@@ -438,11 +438,14 @@ class TopicCannibalizationAnalyzer:
     def parse_embeddings(embeddings_str: str) -> np.ndarray:
         """Parse embedding string to numpy array"""
         try:
+            # Try to parse as JSON first
             embeddings = json.loads(embeddings_str)
         except:
             try:
+                # Try to parse as Python literal
                 embeddings = ast.literal_eval(embeddings_str)
             except:
+                # If all else fails, try to extract numbers
                 import re
                 numbers = re.findall(r'-?\d+\.?\d*', embeddings_str)
                 embeddings = [float(n) for n in numbers]
@@ -466,20 +469,47 @@ class TopicCannibalizationAnalyzer:
         if not embeddings_col:
             return {"error": "No embeddings column found"}
         
+        # Parse embeddings and track dimensions
+        embedding_dims = []
         for idx, row in df.iterrows():
             try:
                 embedding = TopicCannibalizationAnalyzer.parse_embeddings(row[embeddings_col])
-                embeddings_list.append(embedding)
-                valid_pages.append(row['Address'])
+                if len(embedding) > 0:  # Only add non-empty embeddings
+                    embedding_dims.append(len(embedding))
+                    embeddings_list.append(embedding)
+                    valid_pages.append(row['Address'])
             except Exception as e:
                 continue
         
         if len(embeddings_list) < 2:
             return {"error": "Not enough valid embeddings to analyze"}
         
-        # Calculate similarity matrix
-        embeddings_matrix = np.vstack(embeddings_list)
-        similarity_matrix = cosine_similarity(embeddings_matrix)
+        # Check if all embeddings have the same dimension
+        unique_dims = set(embedding_dims)
+        if len(unique_dims) > 1:
+            # Find the most common dimension
+            most_common_dim = max(set(embedding_dims), key=embedding_dims.count)
+            
+            # Filter to only embeddings with the most common dimension
+            filtered_embeddings = []
+            filtered_pages = []
+            for emb, page, dim in zip(embeddings_list, valid_pages, embedding_dims):
+                if dim == most_common_dim:
+                    filtered_embeddings.append(emb)
+                    filtered_pages.append(page)
+            
+            embeddings_list = filtered_embeddings
+            valid_pages = filtered_pages
+            
+            if len(embeddings_list) < 2:
+                return {"error": f"Not enough embeddings with consistent dimensions. Found dimensions: {unique_dims}"}
+        
+        try:
+            # Calculate similarity matrix
+            embeddings_matrix = np.vstack(embeddings_list)
+            similarity_matrix = cosine_similarity(embeddings_matrix)
+        except Exception as e:
+            return {"error": f"Error calculating similarities: {str(e)}"}
         
         # Find high similarity pairs
         high_similarity_pairs = []
@@ -496,16 +526,23 @@ class TopicCannibalizationAnalyzer:
         
         high_similarity_pairs.sort(key=lambda x: x['similarity'], reverse=True)
         
+        # Create similarity DataFrame
         sim_df = pd.DataFrame(similarity_matrix, 
                             index=valid_pages, 
                             columns=valid_pages)
+        
+        # Calculate average similarity (excluding diagonal)
+        mask = np.ones_like(similarity_matrix, dtype=bool)
+        np.fill_diagonal(mask, 0)
+        avg_similarity = similarity_matrix[mask].mean() if mask.any() else 0
         
         return {
             "similarity_matrix": sim_df,
             "high_similarity_pairs": high_similarity_pairs[:20],
             "total_pages": len(valid_pages),
             "pages_with_high_similarity": len(high_similarity_pairs),
-            "average_similarity": float(np.mean(similarity_matrix[np.triu_indices_from(similarity_matrix, k=1)]))
+            "average_similarity": float(avg_similarity),
+            "embedding_dimension": embeddings_matrix.shape[1] if len(embeddings_list) > 0 else 0
         }
 
 # ============================================================================
