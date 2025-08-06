@@ -1,7 +1,6 @@
 """
 SEO Cannibalization Analysis App
-Complete FIXED version for Streamlit Cloud deployment
-All bugs corrected - no self-comparison, proper counting, real AI analysis
+Improved version with URL normalization, click-based prioritization, and enhanced SERP analysis
 """
 
 import streamlit as st
@@ -14,11 +13,12 @@ from datetime import datetime
 import plotly.express as px
 import plotly.graph_objects as go
 from sklearn.metrics.pairwise import cosine_similarity
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse, parse_qs, urlencode
 import ast
 from typing import Dict, List, Tuple, Optional
 import time
 import io
+import re
 
 # AI Provider Imports (optional)
 try:
@@ -85,6 +85,50 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ============================================================================
+# URL NORMALIZATION FUNCTIONS
+# ============================================================================
+
+def normalize_url(url: str) -> str:
+    """
+    Normalize URL by removing fragments, sorting query parameters, and handling trailing slashes
+    This ensures URLs with different fragments or parameter orders are treated as the same page
+    """
+    try:
+        # Parse the URL
+        parsed = urlparse(url.lower().strip())
+        
+        # Remove fragment (everything after #)
+        parsed = parsed._replace(fragment='')
+        
+        # Parse and sort query parameters
+        query_params = parse_qs(parsed.query, keep_blank_values=True)
+        
+        # Remove common tracking parameters that don't affect content
+        tracking_params = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 
+                          'utm_content', 'fbclid', 'gclid', 'msclkid', '_ga']
+        for param in tracking_params:
+            query_params.pop(param, None)
+        
+        # Sort parameters for consistent ordering
+        sorted_query = urlencode(sorted(query_params.items()), doseq=True)
+        parsed = parsed._replace(query=sorted_query)
+        
+        # Remove trailing slash from path (except for root)
+        path = parsed.path.rstrip('/') if parsed.path != '/' else '/'
+        parsed = parsed._replace(path=path)
+        
+        # Reconstruct URL
+        normalized = urlunparse(parsed)
+        
+        # Remove default ports
+        normalized = normalized.replace(':80/', '/').replace(':443/', '/')
+        
+        return normalized
+    except:
+        # If normalization fails, return original URL
+        return url.lower().strip()
+
+# ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
 
@@ -110,6 +154,9 @@ def validate_gsc_data(df: pd.DataFrame) -> Tuple[bool, str]:
     if null_urls > 0:
         df = df.dropna(subset=['Landing Page'])
     
+    # Normalize URLs
+    df['Normalized_URL'] = df['Landing Page'].apply(normalize_url)
+    
     return True, "Data validation successful"
 
 def validate_embeddings_data(df: pd.DataFrame) -> Tuple[bool, str]:
@@ -121,13 +168,23 @@ def validate_embeddings_data(df: pd.DataFrame) -> Tuple[bool, str]:
     if not embeddings_cols:
         return False, "No embeddings column found"
     
+    # Normalize URLs in embeddings data
+    df['Normalized_URL'] = df['Address'].apply(normalize_url)
+    
     return True, "Embeddings data validation successful"
 
-def calculate_severity(pages_affected: int, overlap_percentage: float, issue_type: str) -> Dict:
+def calculate_severity(pages_affected: int, overlap_percentage: float, issue_type: str, total_clicks: int = 0) -> Dict:
     """Calculate severity and impact for different cannibalization types"""
     
+    # Adjust severity based on click impact
+    click_multiplier = 1.0
+    if total_clicks > 1000:
+        click_multiplier = 1.5
+    elif total_clicks > 100:
+        click_multiplier = 1.2
+    
     if issue_type == "keyword":
-        if pages_affected > 20 or overlap_percentage > 50:
+        if (pages_affected > 20 or overlap_percentage > 50) and click_multiplier > 1:
             severity = "CRITICAL"
             impact = "50-110% potential traffic loss"
             priority = "Immediate action required"
@@ -149,7 +206,7 @@ def calculate_severity(pages_affected: int, overlap_percentage: float, issue_typ
             color = "🟢"
     
     elif issue_type == "content":
-        if overlap_percentage > 60:
+        if overlap_percentage > 65:  # Updated threshold per user request
             severity = "CRITICAL"
             impact = "Severe SERP competition"
             priority = "Immediate content differentiation needed"
@@ -243,13 +300,13 @@ KEYWORD CANNIBALIZATION DATA:
 - Pages with issues: {keyword_data.get('pages_with_cannibalization', 0)}
 - Total overlap pairs: {keyword_data.get('total_overlap_pairs', 0)}
 - Average overlap: {keyword_data.get('average_overlap', 0):.1f}%
+- Total clicks affected: {keyword_data.get('total_clicks_affected', 0)}
 - Top issues: {json.dumps(list(keyword_data.get('top_issues', {}).items())[:3], indent=2)}
 
 CONTENT/SERP CANNIBALIZATION DATA:
 - Queries analyzed: {content_data.get('total_queries_analyzed', 0)}
 - Queries with overlap: {content_data.get('queries_with_overlap', 0)}
 - Average SERP overlap: {content_data.get('average_overlap', 0):.1f}%
-- Competition clusters: {len(content_data.get('competition_clusters', []))}
 
 TOPIC CANNIBALIZATION DATA:
 - Pages analyzed: {topic_data.get('total_pages', 0)}
@@ -294,70 +351,114 @@ Be specific with page URLs and keywords when making recommendations."""
         return ""
 
 # ============================================================================
-# FIXED ANALYZER CLASSES
+# IMPROVED ANALYZER CLASSES
 # ============================================================================
 
 class KeywordCannibalizationAnalyzer:
-    """FIXED: Analyzes keyword overlap between URLs - no self-comparison"""
+    """Analyzes keyword overlap between URLs with click prioritization"""
     
     @staticmethod
-    def analyze(df: pd.DataFrame, threshold: float = 10) -> Dict:
-        """Analyze keyword overlap between landing pages"""
+    def analyze(df: pd.DataFrame, threshold: float = 10, min_clicks: int = 1) -> Dict:
+        """Analyze keyword overlap between landing pages with click-based prioritization"""
         
-        # Clean data - remove any duplicate URL-keyword pairs
-        df_clean = df.drop_duplicates(subset=['Landing Page', 'Query'])
+        # Use normalized URLs for comparison
+        df_clean = df.drop_duplicates(subset=['Normalized_URL', 'Query'])
         
-        # Group by landing page
-        page_keywords = df_clean.groupby('Landing Page')['Query'].apply(list).to_dict()
+        # Aggregate clicks by normalized URL and query
+        df_agg = df_clean.groupby(['Normalized_URL', 'Query']).agg({
+            'Clicks': 'sum',
+            'Impressions': 'sum',
+            'Landing Page': 'first'  # Keep original URL for display
+        }).reset_index()
+        
+        # Filter by minimum clicks if specified
+        if min_clicks > 0:
+            df_filtered = df_agg[df_agg['Clicks'] >= min_clicks]
+            if df_filtered.empty:
+                df_filtered = df_agg  # Fall back to all data if no keywords meet criteria
+        else:
+            df_filtered = df_agg
+        
+        # Calculate total clicks per keyword for prioritization
+        keyword_clicks = df_filtered.groupby('Query')['Clicks'].sum().to_dict()
+        
+        # Group by normalized URL
+        page_keywords = df_filtered.groupby('Normalized_URL').apply(
+            lambda x: list(zip(x['Query'].tolist(), x['Clicks'].tolist()))
+        ).to_dict()
         
         # Get unique pages
         pages = list(page_keywords.keys())
         overlap_details = {}
         pages_with_issues = set()
+        total_clicks_affected = 0
         
-        # Calculate overlap - SKIP SELF-COMPARISON
+        # Calculate overlap - comparing normalized URLs
         for i in range(len(pages)):
-            for j in range(i + 1, len(pages)):  # Start from i+1 to avoid self-comparison
+            for j in range(i + 1, len(pages)):
                 page1 = pages[i]
                 page2 = pages[j]
                 
-                keywords1 = set(page_keywords[page1])
-                keywords2 = set(page_keywords[page2])
+                # Get keywords and clicks
+                keywords1_with_clicks = page_keywords[page1]
+                keywords2_with_clicks = page_keywords[page2]
+                
+                keywords1 = set([k for k, c in keywords1_with_clicks])
+                keywords2 = set([k for k, c in keywords2_with_clicks])
                 
                 overlap = keywords1.intersection(keywords2)
                 
-                if len(overlap) > 0:  # Only if there's actual overlap
+                if len(overlap) > 0:
                     union = keywords1.union(keywords2)
                     overlap_pct = (len(overlap) / len(union)) * 100 if union else 0
                     
-                    if overlap_pct > threshold:
-                        # Track unique pages with issues
+                    # Calculate total clicks for overlapping keywords
+                    overlap_clicks = sum(keyword_clicks.get(kw, 0) for kw in overlap)
+                    
+                    if overlap_pct > threshold and overlap_clicks > 0:
                         pages_with_issues.add(page1)
                         pages_with_issues.add(page2)
+                        total_clicks_affected += overlap_clicks
                         
-                        # Create unique key for this pair
-                        key = f"{page1[:50]}...||{page2[:50]}..."
+                        # Get original URLs for display
+                        original_url1 = df_filtered[df_filtered['Normalized_URL'] == page1]['Landing Page'].iloc[0]
+                        original_url2 = df_filtered[df_filtered['Normalized_URL'] == page2]['Landing Page'].iloc[0]
+                        
+                        # Sort overlapping keywords by clicks
+                        overlap_with_clicks = [(kw, keyword_clicks.get(kw, 0)) for kw in overlap]
+                        overlap_with_clicks.sort(key=lambda x: x[1], reverse=True)
+                        
+                        key = f"{original_url1[:50]}...||{original_url2[:50]}..."
                         
                         overlap_details[key] = {
-                            "page1_full": page1,
-                            "page2_full": page2,
+                            "page1_full": original_url1,
+                            "page2_full": original_url2,
+                            "normalized_page1": page1,
+                            "normalized_page2": page2,
                             "overlap_percentage": round(overlap_pct, 2),
-                            "shared_keywords": sorted(list(overlap))[:20],
+                            "shared_keywords": [kw for kw, _ in overlap_with_clicks[:20]],
+                            "shared_keywords_with_clicks": overlap_with_clicks[:20],
                             "total_shared": len(overlap),
+                            "total_clicks_affected": overlap_clicks,
                             "page1_total": len(keywords1),
                             "page2_total": len(keywords2),
                             "page1_unique": len(keywords1 - keywords2),
                             "page2_unique": len(keywords2 - keywords1)
                         }
         
-        # Sort by overlap percentage
+        # Sort by total clicks affected (prioritize high-traffic overlaps)
         top_issues = sorted(overlap_details.items(), 
-                          key=lambda x: x[1]['overlap_percentage'], 
+                          key=lambda x: x[1]['total_clicks_affected'], 
                           reverse=True)[:15]
         
         # Calculate severity
         avg_overlap = np.mean([d['overlap_percentage'] for d in overlap_details.values()]) if overlap_details else 0
-        severity_info = calculate_severity(len(pages_with_issues), avg_overlap, "keyword")
+        severity_info = calculate_severity(
+            len(pages_with_issues), 
+            avg_overlap, 
+            "keyword",
+            total_clicks_affected
+        )
         
         return {
             "overlap_details": overlap_details,
@@ -366,11 +467,13 @@ class KeywordCannibalizationAnalyzer:
             "pages_with_cannibalization": len(pages_with_issues),
             "total_overlap_pairs": len(overlap_details),
             "average_overlap": avg_overlap,
-            "severity_info": severity_info
+            "total_clicks_affected": total_clicks_affected,
+            "severity_info": severity_info,
+            "filtered_by_clicks": min_clicks > 0
         }
 
 class ContentCannibalizationAnalyzer:
-    """FIXED: Analyzes SERP overlap for queries using Serper API"""
+    """Analyzes SERP overlap for queries using Serper API"""
     
     @staticmethod
     async def fetch_serp(session, query: str, api_key: str, num_results: int = 10) -> Dict:
@@ -418,14 +521,21 @@ class ContentCannibalizationAnalyzer:
             return {'domains': [], 'urls': [], 'titles': [], 'positions': [], 'error': str(e)}
     
     @staticmethod
-    async def analyze_serp_overlap(queries: List[str], api_key: str, sample_size: int = 50, progress_callback=None) -> Dict:
+    async def analyze_serp_overlap(queries_df: pd.DataFrame, api_key: str, sample_size: int = 50, 
+                                  progress_callback=None, min_clicks: int = 1) -> Dict:
         """Analyze SERP overlap between queries using Serper API"""
         
         if not api_key:
             return {"error": "Serper API key is required for SERP analysis"}
         
-        # Remove duplicates and limit sample size
-        queries = list(set(queries))[:sample_size]
+        # Sort queries by total clicks and filter
+        query_clicks = queries_df.groupby('Query')['Clicks'].sum().sort_values(ascending=False)
+        
+        if min_clicks > 0:
+            query_clicks = query_clicks[query_clicks >= min_clicks]
+        
+        # Get top queries by clicks
+        queries = list(query_clicks.index[:sample_size])
         
         if len(queries) < 2:
             return {"error": "Need at least 2 unique queries to analyze overlap"}
@@ -435,7 +545,7 @@ class ContentCannibalizationAnalyzer:
         failed_queries = []
         
         async with aiohttp.ClientSession() as session:
-            batch_size = 5  # Smaller batches for rate limiting
+            batch_size = 5
             
             for batch_start in range(0, len(queries), batch_size):
                 batch_end = min(batch_start + batch_size, len(queries))
@@ -478,11 +588,15 @@ class ContentCannibalizationAnalyzer:
                 union = set(serp1).union(set(serp2))
                 overlap_pct = (len(overlap) / len(union)) * 100 if union else 0
                 
-                if overlap_pct > 30:  # Significant overlap threshold
+                if overlap_pct > 65:  # Updated threshold per user request
                     queries_with_issues.add(query1)
                     queries_with_issues.add(query2)
                     
                     key = f"{query1}||{query2}"
+                    
+                    # Get click data for both queries
+                    q1_clicks = query_clicks.get(query1, 0)
+                    q2_clicks = query_clicks.get(query2, 0)
                     
                     # Calculate position-weighted score
                     position_score = 0
@@ -496,11 +610,14 @@ class ContentCannibalizationAnalyzer:
                     overlap_matrix[key] = {
                         "query1": query1,
                         "query2": query2,
+                        "query1_clicks": q1_clicks,
+                        "query2_clicks": q2_clicks,
+                        "total_clicks": q1_clicks + q2_clicks,
                         "overlap_percentage": round(overlap_pct, 2),
                         "shared_domains": list(overlap)[:10],
                         "total_shared": len(overlap),
                         "position_weighted_score": round(position_score, 2),
-                        "competition_level": "High" if overlap_pct > 60 else "Medium" if overlap_pct > 40 else "Low"
+                        "competition_level": "High" if overlap_pct > 65 else "Medium" if overlap_pct > 40 else "Low"
                     }
         
         # Individual query metrics
@@ -508,32 +625,13 @@ class ContentCannibalizationAnalyzer:
             query_metrics[query] = {
                 "total_results": len(serp),
                 "top_domain": serp[0] if serp else None,
-                "unique_domains": len(set(serp))
+                "unique_domains": len(set(serp)),
+                "clicks": query_clicks.get(query, 0)
             }
         
-        # Find competition clusters
-        competition_clusters = []
-        processed = set()
-        
-        for key in overlap_matrix:
-            q1, q2 = key.split('||')
-            if q1 not in processed:
-                cluster = {q1, q2}
-                
-                # Find related queries
-                for other_key in overlap_matrix:
-                    other_q1, other_q2 = other_key.split('||')
-                    if other_q1 in cluster or other_q2 in cluster:
-                        cluster.add(other_q1)
-                        cluster.add(other_q2)
-                
-                if len(cluster) > 2:
-                    competition_clusters.append(sorted(list(cluster)))
-                    processed.update(cluster)
-        
-        # Sort results
+        # Sort results by total clicks affected
         top_overlaps = dict(sorted(overlap_matrix.items(), 
-                                 key=lambda x: x[1]['overlap_percentage'], 
+                                 key=lambda x: x[1]['total_clicks'], 
                                  reverse=True)[:20])
         
         # Calculate severity
@@ -542,19 +640,20 @@ class ContentCannibalizationAnalyzer:
         
         return {
             "total_queries_analyzed": len(serp_data),
+            "total_queries_available": len(query_clicks),
             "queries_with_overlap": len(queries_with_issues),
             "total_overlap_pairs": len(overlap_matrix),
             "top_overlaps": top_overlaps,
             "average_overlap": avg_overlap,
             "query_metrics": query_metrics,
-            "competition_clusters": competition_clusters[:5],
             "api_credits_used": len(serp_data),
             "failed_queries": failed_queries,
-            "severity_info": severity_info
+            "severity_info": severity_info,
+            "selection_criteria": f"Top {sample_size} queries by clicks (min {min_clicks} clicks)"
         }
 
 class TopicCannibalizationAnalyzer:
-    """FIXED: Analyzes semantic similarity between pages with proper dimension handling"""
+    """Analyzes semantic similarity between pages with proper dimension handling"""
     
     @staticmethod
     def parse_embeddings(embeddings_str: str) -> np.ndarray:
@@ -580,6 +679,7 @@ class TopicCannibalizationAnalyzer:
         
         embeddings_list = []
         valid_pages = []
+        normalized_urls = []
         
         # Find embeddings column
         embeddings_col = None
@@ -600,6 +700,7 @@ class TopicCannibalizationAnalyzer:
                     embedding_dims.append(len(embedding))
                     embeddings_list.append(embedding)
                     valid_pages.append(row['Address'])
+                    normalized_urls.append(row['Normalized_URL'])
             except Exception as e:
                 continue
         
@@ -614,13 +715,16 @@ class TopicCannibalizationAnalyzer:
             # Filter to consistent dimensions
             filtered_embeddings = []
             filtered_pages = []
-            for emb, page, dim in zip(embeddings_list, valid_pages, embedding_dims):
+            filtered_normalized = []
+            for emb, page, norm, dim in zip(embeddings_list, valid_pages, normalized_urls, embedding_dims):
                 if dim == most_common_dim:
                     filtered_embeddings.append(emb)
                     filtered_pages.append(page)
+                    filtered_normalized.append(norm)
             
             embeddings_list = filtered_embeddings
             valid_pages = filtered_pages
+            normalized_urls = filtered_normalized
             
             if len(embeddings_list) < 2:
                 return {"error": f"Inconsistent embedding dimensions. Found: {unique_dims}. Need at least 2 embeddings with same dimension."}
@@ -637,7 +741,11 @@ class TopicCannibalizationAnalyzer:
         pages_with_issues = set()
         
         for i in range(len(valid_pages)):
-            for j in range(i + 1, len(valid_pages)):  # Start from i+1 to avoid self-comparison
+            for j in range(i + 1, len(valid_pages)):
+                # Skip if same normalized URL
+                if normalized_urls[i] == normalized_urls[j]:
+                    continue
+                    
                 similarity = similarity_matrix[i, j]
                 if similarity > threshold:
                     pages_with_issues.add(valid_pages[i])
@@ -646,6 +754,8 @@ class TopicCannibalizationAnalyzer:
                     high_similarity_pairs.append({
                         "page1": valid_pages[i],
                         "page2": valid_pages[j],
+                        "normalized_page1": normalized_urls[i],
+                        "normalized_page2": normalized_urls[j],
                         "similarity": round(float(similarity), 3)
                     })
         
@@ -706,17 +816,20 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         topic_results.get('pages_with_high_similarity', 0)
     )
     
-    if issues_found > 50:
+    total_clicks_affected = keyword_results.get('total_clicks_affected', 0)
+    
+    if issues_found > 50 or total_clicks_affected > 1000:
         report += "### 🔴 CRITICAL - Immediate Action Required\n"
-    elif issues_found > 20:
+    elif issues_found > 20 or total_clicks_affected > 500:
         report += "### 🟠 HIGH - Significant Issues Found\n"
-    elif issues_found > 10:
+    elif issues_found > 10 or total_clicks_affected > 100:
         report += "### 🟡 MEDIUM - Moderate Issues Found\n"
     else:
         report += "### 🟢 LOW - Minor Issues Found\n"
     
     report += f"""
 **Total Issues Identified:** {issues_found}
+**Total Clicks Affected:** {total_clicks_affected:,}
 **Estimated Traffic Impact:** {keyword_severity.get('impact', 'N/A')}
 
 ---
@@ -730,6 +843,7 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 - **Pages with Cannibalization:** {keyword_results.get('pages_with_cannibalization', 0)}
 - **Overlap Pairs Found:** {keyword_results.get('total_overlap_pairs', 0)}
 - **Average Overlap:** {keyword_results.get('average_overlap', 0):.1f}%
+- **Total Clicks Affected:** {keyword_results.get('total_clicks_affected', 0):,}
 
 ### Impact Assessment:
 - {keyword_severity.get('impact', 'N/A')}
@@ -738,17 +852,20 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
     
     # Add top keyword issues with specific recommendations
     if keyword_results.get('top_issues'):
-        report += "\n### Top 5 Critical Keyword Overlaps:\n"
+        report += "\n### Top 5 Critical Keyword Overlaps (Sorted by Click Impact):\n"
         for i, (pages, data) in enumerate(list(keyword_results['top_issues'].items())[:5], 1):
             report += f"""
-**Issue #{i}: {data['overlap_percentage']}% Overlap**
+**Issue #{i}: {data['overlap_percentage']}% Overlap - {data['total_clicks_affected']:,} Clicks Affected**
 - **Pages Competing:** 
   - Page 1: `{data.get('page1_full', pages.split('||')[0])[:100]}`
   - Page 2: `{data.get('page2_full', pages.split('||')[1])[:100]}`
 - **Shared Keywords:** {data['total_shared']} keywords
-- **Top Competing Keywords:** {', '.join(data['shared_keywords'][:5])}
-- **Recommended Action:** {"Merge pages (>50% overlap)" if data['overlap_percentage'] > 50 else "Differentiate content (30-50% overlap)" if data['overlap_percentage'] > 30 else "Monitor performance"}
+- **Top Competing Keywords (by clicks):** 
 """
+            for kw, clicks in data.get('shared_keywords_with_clicks', [])[:5]:
+                report += f"  - {kw} ({clicks:,} clicks)\n"
+            
+            report += f"- **Recommended Action:** {"Merge pages (>50% overlap)" if data['overlap_percentage'] > 50 else "Differentiate content (30-50% overlap)" if data['overlap_percentage'] > 30 else "Monitor performance"}\n"
     
     report += f"""
 ---
@@ -758,10 +875,10 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 {content_severity.get('color', '')} **Severity: {content_severity.get('severity', 'N/A')}**
 
 ### Key Metrics:
-- **Queries Analyzed:** {content_results.get('total_queries_analyzed', 0)}
-- **Queries with SERP Overlap:** {content_results.get('queries_with_overlap', 0)}
+- **Queries Analyzed:** {content_results.get('total_queries_analyzed', 0)} out of {content_results.get('total_queries_available', 0)} total
+- **Selection Criteria:** {content_results.get('selection_criteria', 'N/A')}
+- **Queries with SERP Overlap (>65%):** {content_results.get('queries_with_overlap', 0)}
 - **Average SERP Overlap:** {content_results.get('average_overlap', 0):.1f}%
-- **Competition Clusters:** {len(content_results.get('competition_clusters', []))}
 - **API Credits Used:** {content_results.get('api_credits_used', 0)}
 
 ### Impact Assessment:
@@ -769,24 +886,16 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 - {content_severity.get('priority', 'N/A')}
 """
     
-    # Add competition clusters
-    if content_results.get('competition_clusters'):
-        report += "\n### Query Competition Clusters:\n"
-        for i, cluster in enumerate(content_results.get('competition_clusters', [])[:3], 1):
-            report += f"\n**Cluster {i}:** {len(cluster)} competing queries\n"
-            report += f"- Queries: {', '.join(cluster[:5])}\n"
-            report += f"- Action: Create distinct content angles for each query\n"
-    
     # Add top SERP overlaps
     if content_results.get('top_overlaps'):
-        report += "\n### Top SERP Competitions:\n"
-        for query_pair, data in list(content_results.get('top_overlaps', {}).items())[:3]:
+        report += "\n### Top SERP Competitions (Sorted by Click Impact):\n"
+        for query_pair, data in list(content_results.get('top_overlaps', {}).items())[:5]:
             report += f"""
-**{data['competition_level']} Competition: {data['overlap_percentage']}% SERP Overlap**
-- Query 1: "{data.get('query1', query_pair.split('||')[0])}"
-- Query 2: "{data.get('query2', query_pair.split('||')[1])}"
+**{data['competition_level']} Competition: {data['overlap_percentage']}% SERP Overlap - {data['total_clicks']:,} Total Clicks**
+- Query 1: "{data.get('query1', query_pair.split('||')[0])}" ({data.get('query1_clicks', 0):,} clicks)
+- Query 2: "{data.get('query2', query_pair.split('||')[1])}" ({data.get('query2_clicks', 0):,} clicks)
 - Shared Domains: {data.get('total_shared', len(data.get('shared_domains', [])))}
-- Action: {"Target different search intents" if data['overlap_percentage'] > 50 else "Optimize for featured snippets"}
+- Action: {"Target different search intents" if data['overlap_percentage'] > 65 else "Optimize for featured snippets"}
 """
     
     report += f"""
@@ -839,19 +948,19 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 ## 📋 Implementation Roadmap
 
 ### Week 1: Quick Wins (Immediate Impact)
-1. **301 Redirects:** Implement for pages with >70% keyword overlap
+1. **301 Redirects:** Implement for pages with >70% keyword overlap and high click volumes
 2. **Canonical Tags:** Add to duplicate content that must remain
-3. **Internal Linking:** Update to point to primary pages
+3. **Internal Linking:** Update to point to primary pages for high-traffic keywords
 4. **Meta Tags:** Differentiate title tags and meta descriptions
 
 ### Week 2-3: Content Optimization
 1. **Content Merging:** Combine pages with >90% semantic similarity
-2. **Content Differentiation:** Rewrite pages targeting different intents
-3. **Topic Clusters:** Create pillar pages and supporting content
+2. **Content Differentiation:** Rewrite pages targeting different search intents
+3. **Topic Clusters:** Create pillar pages for high-traffic topics
 4. **URL Structure:** Implement clear hierarchical URL structure
 
 ### Week 4: Monitoring & Refinement
-1. **Track Rankings:** Monitor keyword position changes
+1. **Track Rankings:** Monitor keyword position changes for affected queries
 2. **Measure Traffic:** Compare before/after organic traffic
 3. **User Metrics:** Check bounce rate and time on page
 4. **Iterate:** Adjust strategy based on results
@@ -860,7 +969,7 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 ## 📈 Expected Results
 
-Based on the severity of issues found:
+Based on the severity of issues found and clicks affected:
 
 - **Traffic Recovery Timeline:** 4-8 weeks
 - **Expected Traffic Increase:** {keyword_severity.get('impact', '10-25%')}
@@ -875,11 +984,13 @@ Based on the severity of issues found:
    - Back up all content
    - Document current rankings
    - Set up proper tracking
+   - Note all URLs with parameters/fragments
 
 2. **During Implementation:**
    - Make changes gradually
    - Monitor for 404 errors
    - Check Google Search Console daily
+   - Ensure proper redirects for normalized URLs
 
 3. **After Changes:**
    - Submit updated sitemap
@@ -899,7 +1010,7 @@ Based on the severity of issues found:
 
 def main():
     st.title("🔍 SEO Cannibalization Analyzer")
-    st.markdown("Comprehensive analysis of keyword, content, and topic cannibalization")
+    st.markdown("Comprehensive analysis of keyword, content, and topic cannibalization with URL normalization")
     
     # Initialize session state for progress tracking
     if 'analysis_progress' not in st.session_state:
@@ -1001,10 +1112,22 @@ def main():
             help="Minimum overlap percentage to flag"
         )
         
+        min_clicks_keyword = st.number_input(
+            "Min Clicks for Keywords",
+            min_value=0, max_value=100, value=1,
+            help="Only analyze keywords with at least this many clicks"
+        )
+        
         serp_sample_size = st.number_input(
             "SERP Analysis Sample Size",
-            min_value=10, max_value=100, value=30,
-            help="Number of queries to analyze"
+            min_value=10, max_value=500, value=100,
+            help="Number of top queries (by clicks) to analyze"
+        )
+        
+        min_clicks_serp = st.number_input(
+            "Min Clicks for SERP Analysis",
+            min_value=0, max_value=100, value=1,
+            help="Only analyze queries with at least this many clicks"
         )
         
         similarity_threshold = st.slider(
@@ -1037,14 +1160,26 @@ def main():
                     
                     if is_valid:
                         st.success(f"✅ Loaded {len(gsc_df)} rows")
+                        
+                        # Show URL normalization info
+                        unique_before = gsc_df['Landing Page'].nunique()
+                        unique_after = gsc_df['Normalized_URL'].nunique()
+                        if unique_before != unique_after:
+                            st.info(f"📊 URL Normalization: {unique_before} unique URLs → {unique_after} normalized URLs")
+                        
                         # Show data preview
                         with st.expander("Preview Data"):
-                            st.dataframe(gsc_df.head(10), use_container_width=True)
+                            preview_df = gsc_df[['Query', 'Landing Page', 'Normalized_URL', 'Clicks', 'Impressions']].head(10)
+                            st.dataframe(preview_df, use_container_width=True)
                         
                         # Show statistics
-                        st.metric("Unique Pages", gsc_df['Landing Page'].nunique())
-                        st.metric("Unique Queries", gsc_df['Query'].nunique())
-                        st.metric("Total Clicks", gsc_df['Clicks'].sum())
+                        col1_1, col1_2, col1_3 = st.columns(3)
+                        with col1_1:
+                            st.metric("Unique Pages", gsc_df['Normalized_URL'].nunique())
+                        with col1_2:
+                            st.metric("Unique Queries", gsc_df['Query'].nunique())
+                        with col1_3:
+                            st.metric("Total Clicks", f"{gsc_df['Clicks'].sum():,}")
                         
                         st.session_state['gsc_df'] = gsc_df
                     else:
@@ -1067,8 +1202,15 @@ def main():
                     
                     if is_valid:
                         st.success(f"✅ Loaded {len(embeddings_df)} pages")
+                        
+                        # Show URL normalization info
+                        unique_before = embeddings_df['Address'].nunique()
+                        unique_after = embeddings_df['Normalized_URL'].nunique()
+                        if unique_before != unique_after:
+                            st.info(f"📊 URL Normalization: {unique_before} unique URLs → {unique_after} normalized URLs")
+                        
                         with st.expander("Preview Data"):
-                            st.dataframe(embeddings_df.head(10), use_container_width=True)
+                            st.dataframe(embeddings_df[['Address', 'Normalized_URL']].head(10), use_container_width=True)
                         
                         st.metric("Total Pages", len(embeddings_df))
                         
@@ -1084,13 +1226,18 @@ def main():
         if 'gsc_df' in st.session_state:
             # Show preview stats
             df = st.session_state['gsc_df']
-            st.info(f"Ready to analyze {df['Landing Page'].nunique()} unique pages and {df['Query'].nunique()} unique queries")
+            st.info(f"Ready to analyze {df['Normalized_URL'].nunique()} unique pages and {df['Query'].nunique()} unique queries")
+            
+            if min_clicks_keyword > 0:
+                filtered_queries = df[df['Clicks'] >= min_clicks_keyword]['Query'].nunique()
+                st.warning(f"⚠️ Filtering to {filtered_queries} queries with at least {min_clicks_keyword} clicks")
             
             if st.button("Analyze Keyword Overlap", type="primary", key="keyword_btn"):
                 with st.spinner("Analyzing keyword overlap (this may take a moment)..."):
                     results = KeywordCannibalizationAnalyzer.analyze(
                         st.session_state['gsc_df'], 
-                        keyword_threshold
+                        keyword_threshold,
+                        min_clicks_keyword
                     )
                     st.session_state['keyword_results'] = results
                     
@@ -1107,25 +1254,33 @@ def main():
                     with col3:
                         st.metric("Overlap Pairs", results['total_overlap_pairs'])
                     with col4:
-                        st.metric("Avg Overlap", f"{results['average_overlap']:.1f}%")
+                        st.metric("Clicks Affected", f"{results['total_clicks_affected']:,}")
                     
                     # Display top issues
                     if results['top_issues']:
-                        st.subheader("🔥 Top Cannibalization Issues")
+                        st.subheader("🔥 Top Cannibalization Issues (Sorted by Click Impact)")
                         for i, (pages, data) in enumerate(list(results['top_issues'].items())[:10], 1):
-                            with st.expander(f"Issue #{i}: {data['overlap_percentage']}% Overlap - {data['total_shared']} shared keywords"):
+                            with st.expander(f"Issue #{i}: {data['total_clicks_affected']:,} clicks affected - {data['overlap_percentage']}% overlap - {data['total_shared']} shared keywords"):
                                 col1, col2 = st.columns(2)
                                 with col1:
                                     st.write("**Page 1:**")
                                     st.code(data.get('page1_full', pages.split('||')[0]))
+                                    if data.get('normalized_page1'):
+                                        st.caption(f"Normalized: {data['normalized_page1'][:80]}...")
                                     st.metric("Unique Keywords", data.get('page1_unique', 0))
                                 with col2:
                                     st.write("**Page 2:**")
                                     st.code(data.get('page2_full', pages.split('||')[1]))
+                                    if data.get('normalized_page2'):
+                                        st.caption(f"Normalized: {data['normalized_page2'][:80]}...")
                                     st.metric("Unique Keywords", data.get('page2_unique', 0))
                                 
-                                st.write("**Shared Keywords:**")
-                                st.write(", ".join(data['shared_keywords'][:20]))
+                                st.write("**Top Shared Keywords (by clicks):**")
+                                if data.get('shared_keywords_with_clicks'):
+                                    for kw, clicks in data['shared_keywords_with_clicks'][:10]:
+                                        st.write(f"• {kw} ({clicks:,} clicks)")
+                                else:
+                                    st.write(", ".join(data['shared_keywords'][:20]))
                                 
                                 if data['overlap_percentage'] > 70:
                                     st.error("⚠️ Critical: Consider merging these pages")
@@ -1146,15 +1301,19 @@ def main():
             else:
                 # Show preview
                 total_queries = st.session_state['gsc_df']['Query'].nunique()
-                st.info(f"Ready to analyze top {min(serp_sample_size, total_queries)} queries out of {total_queries} total unique queries")
+                
+                # Calculate how many queries meet the click threshold
+                queries_meeting_threshold = len(st.session_state['gsc_df'][
+                    st.session_state['gsc_df']['Clicks'] >= min_clicks_serp
+                ]['Query'].unique())
+                
+                st.info(f"Ready to analyze top {min(serp_sample_size, queries_meeting_threshold)} queries (by clicks) out of {queries_meeting_threshold} queries with ≥{min_clicks_serp} clicks (total: {total_queries} unique queries)")
                 
                 if st.button("Analyze SERP Overlap", type="primary", key="serp_btn"):
                     progress_bar = st.progress(0)
                     status_text = st.empty()
                     
-                    with st.spinner(f"Analyzing SERPs for {min(serp_sample_size, total_queries)} queries..."):
-                        queries = st.session_state['gsc_df']['Query'].unique()[:serp_sample_size]
-                        
+                    with st.spinner(f"Analyzing SERPs for top {min(serp_sample_size, queries_meeting_threshold)} queries..."):
                         # Progress callback
                         def update_progress(value):
                             progress_bar.progress(int(value))
@@ -1167,10 +1326,11 @@ def main():
                         try:
                             results = loop.run_until_complete(
                                 ContentCannibalizationAnalyzer.analyze_serp_overlap(
-                                    queries.tolist(), 
+                                    st.session_state['gsc_df'], 
                                     serper_api_key,
                                     serp_sample_size,
-                                    update_progress
+                                    update_progress,
+                                    min_clicks_serp
                                 )
                             )
                             
@@ -1189,7 +1349,7 @@ def main():
                                 with col1:
                                     st.metric("Queries Analyzed", results['total_queries_analyzed'])
                                 with col2:
-                                    st.metric("Queries with Overlap", results['queries_with_overlap'])
+                                    st.metric("Queries with Overlap (>65%)", results['queries_with_overlap'])
                                 with col3:
                                     st.metric("Avg SERP Overlap", f"{results['average_overlap']:.1f}%")
                                 with col4:
@@ -1199,32 +1359,29 @@ def main():
                                 if results.get('failed_queries'):
                                     st.warning(f"⚠️ Failed to fetch SERPs for {len(results['failed_queries'])} queries")
                                 
-                                # Competition clusters
-                                if results.get('competition_clusters'):
-                                    st.subheader("🎯 Competition Clusters")
-                                    for i, cluster in enumerate(results['competition_clusters'], 1):
-                                        with st.expander(f"Cluster {i}: {len(cluster)} competing queries"):
-                                            st.write("These queries are competing for similar SERP positions:")
-                                            for query in cluster[:10]:
-                                                st.write(f"• {query}")
-                                            st.info("💡 Consider creating distinct content angles for each query")
-                                
                                 # Top overlaps
                                 if results.get('top_overlaps'):
-                                    st.subheader("🔥 Top SERP Overlaps")
+                                    st.subheader("🔥 Top SERP Overlaps (Sorted by Click Impact)")
                                     for query_pair, data in list(results['top_overlaps'].items())[:10]:
-                                        with st.expander(f"{data['competition_level']} Competition: {data['overlap_percentage']}% overlap"):
+                                        with st.expander(f"{data['competition_level']} Competition: {data['total_clicks']:,} total clicks - {data['overlap_percentage']}% overlap"):
                                             col1, col2 = st.columns(2)
                                             with col1:
                                                 st.write(f"**Query 1:** {data.get('query1', 'N/A')}")
+                                                st.metric("Clicks", f"{data.get('query1_clicks', 0):,}")
                                             with col2:
                                                 st.write(f"**Query 2:** {data.get('query2', 'N/A')}")
+                                                st.metric("Clicks", f"{data.get('query2_clicks', 0):,}")
                                             
                                             st.write(f"**Shared Domains ({data.get('total_shared', 0)}):**")
                                             for domain in data.get('shared_domains', [])[:5]:
                                                 st.write(f"• {domain}")
                                             
                                             st.write(f"**Position Score:** {data.get('position_weighted_score', 0)}")
+                                            
+                                            if data['overlap_percentage'] > 65:
+                                                st.error("⚠️ Critical: Same search intent - consider consolidating content")
+                                            else:
+                                                st.info("ℹ️ Moderate overlap - differentiate content angles")
                             else:
                                 st.error(f"❌ {results.get('error', 'Unknown error')}")
                                 
@@ -1239,7 +1396,7 @@ def main():
         
         if 'embeddings_df' in st.session_state:
             df = st.session_state['embeddings_df']
-            st.info(f"Ready to analyze {len(df)} pages for semantic similarity")
+            st.info(f"Ready to analyze {len(df)} pages for semantic similarity (normalized to {df['Normalized_URL'].nunique()} unique URLs)")
             
             if st.button("Analyze Semantic Similarity", type="primary", key="topic_btn"):
                 with st.spinner("Calculating semantic similarities..."):
@@ -1269,7 +1426,7 @@ def main():
                         
                         # Top similar pairs
                         if results.get('high_similarity_pairs'):
-                            st.subheader("🔥 Highly Similar Pages")
+                            st.subheader("🔥 Highly Similar Pages (Excluding Same Normalized URLs)")
                             for i, pair in enumerate(results['high_similarity_pairs'][:10], 1):
                                 similarity_pct = pair['similarity'] * 100
                                 with st.expander(f"Pair #{i}: {similarity_pct:.1f}% Similar"):
@@ -1277,9 +1434,13 @@ def main():
                                     with col1:
                                         st.write("**Page 1:**")
                                         st.code(pair['page1'])
+                                        if pair.get('normalized_page1'):
+                                            st.caption(f"Normalized: {pair['normalized_page1'][:80]}...")
                                     with col2:
                                         st.write("**Page 2:**")
                                         st.code(pair['page2'])
+                                        if pair.get('normalized_page2'):
+                                            st.caption(f"Normalized: {pair['normalized_page2'][:80]}...")
                                     
                                     if pair['similarity'] > 0.95:
                                         st.error("⚠️ Critical: These pages are nearly identical - merge immediately")
