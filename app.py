@@ -791,7 +791,8 @@ class TopicCannibalizationAnalyzer:
 # ============================================================================
 
 def generate_comprehensive_report(keyword_results: Dict, content_results: Dict, 
-                                 topic_results: Dict, ai_provider: AIProvider) -> str:
+                                 topic_results: Dict, ai_provider: AIProvider,
+                                 ai_recommendations: Dict = None) -> str:
     """Generate comprehensive analysis report with real insights"""
     
     # Get severity info
@@ -940,6 +941,24 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         else:
             report += "*(AI analysis not available - configure AI provider for detailed recommendations)*"
     
+    # Add specific actionable recommendations if available
+    if ai_recommendations and ai_recommendations.get("immediate_actions"):
+        report += "\n\n### 🎯 Prioritized Action Items\n\n"
+        
+        if ai_recommendations.get("immediate_actions"):
+            report += "**Immediate Actions (This Week):**\n"
+            for i, action in enumerate(ai_recommendations["immediate_actions"][:5], 1):
+                report += f"\n{i}. **{action['action']}**\n"
+                report += f"   - Priority: {action['priority']}\n"
+                report += f"   - Reason: {action['reason']}\n"
+                if action.get('expected_impact'):
+                    report += f"   - Expected Impact: {action['expected_impact']}\n"
+        
+        if ai_recommendations.get("quick_wins"):
+            report += "\n**Quick Wins (Can be done today):**\n"
+            for i, win in enumerate(ai_recommendations["quick_wins"][:3], 1):
+                report += f"\n{i}. {win['action']} ({win['time']})\n"
+    
     # Add implementation roadmap
     report += """
 
@@ -1005,12 +1024,480 @@ Based on the severity of issues found and clicks affected:
     return report
 
 # ============================================================================
+# AI RECOMMENDATIONS FUNCTIONS
+# ============================================================================
+
+def generate_ai_recommendations(keyword_data: Dict, content_data: Dict, 
+                               topic_data: Dict, ai_provider: AIProvider) -> Dict:
+    """Generate comprehensive AI-powered recommendations based on analysis results"""
+    
+    recommendations = {
+        "immediate_actions": [],
+        "consolidation_candidates": [],
+        "content_optimization": [],
+        "technical_fixes": [],
+        "long_term_strategy": [],
+        "quick_wins": [],
+        "priority_order": []
+    }
+    
+    # Analyze keyword cannibalization issues
+    if keyword_data and keyword_data.get('top_issues'):
+        for pages, data in list(keyword_data.get('top_issues', {}).items())[:5]:
+            overlap_pct = data['overlap_percentage']
+            clicks_affected = data.get('total_clicks_affected', 0)
+            
+            if overlap_pct > 70 and clicks_affected > 100:
+                # Critical: Immediate consolidation needed
+                recommendations["immediate_actions"].append({
+                    "type": "consolidation",
+                    "priority": "CRITICAL",
+                    "page1": data.get('page1_full', ''),
+                    "page2": data.get('page2_full', ''),
+                    "action": "Merge pages with 301 redirect",
+                    "reason": f"{overlap_pct}% keyword overlap affecting {clicks_affected:,} clicks",
+                    "expected_impact": "50-70% traffic recovery within 4-6 weeks",
+                    "implementation": [
+                        "1. Combine best content from both pages",
+                        "2. Create comprehensive page targeting main keyword",
+                        "3. Implement 301 redirect from weaker page",
+                        "4. Update all internal links",
+                        "5. Submit updated sitemap"
+                    ]
+                })
+            elif overlap_pct > 50:
+                # High: Content differentiation needed
+                recommendations["content_optimization"].append({
+                    "type": "differentiation",
+                    "priority": "HIGH",
+                    "page1": data.get('page1_full', ''),
+                    "page2": data.get('page2_full', ''),
+                    "action": "Differentiate content focus",
+                    "reason": f"{overlap_pct}% overlap on {data['total_shared']} keywords",
+                    "strategy": "Re-optimize for different search intents",
+                    "suggestions": [
+                        f"Page 1: Target transactional intent for top keywords",
+                        f"Page 2: Target informational/educational intent",
+                        "Use different long-tail variations",
+                        "Update meta titles and descriptions"
+                    ]
+                })
+            elif overlap_pct > 30:
+                # Medium: Technical optimization
+                recommendations["technical_fixes"].append({
+                    "type": "technical",
+                    "priority": "MEDIUM",
+                    "pages": [data.get('page1_full', ''), data.get('page2_full', '')],
+                    "action": "Implement canonical tags or adjust internal linking",
+                    "reason": f"Moderate overlap ({overlap_pct}%) causing ranking confusion"
+                })
+    
+    # Analyze content/SERP cannibalization
+    if content_data and content_data.get('top_overlaps'):
+        for query_pair, data in list(content_data.get('top_overlaps', {}).items())[:5]:
+            if data['overlap_percentage'] > 65:
+                recommendations["immediate_actions"].append({
+                    "type": "serp_consolidation",
+                    "priority": "HIGH",
+                    "query1": data.get('query1', ''),
+                    "query2": data.get('query2', ''),
+                    "clicks_impact": data.get('total_clicks', 0),
+                    "action": "Consolidate search intent",
+                    "reason": f"{data['overlap_percentage']}% SERP overlap indicates same search intent",
+                    "strategy": "Create single authoritative page for both queries",
+                    "implementation": [
+                        "1. Identify pages ranking for these queries",
+                        "2. Merge content into comprehensive resource",
+                        "3. Target primary query with secondary variations",
+                        "4. Implement schema markup for better SERP visibility"
+                    ]
+                })
+    
+    # Analyze topic/semantic similarity
+    if topic_data and topic_data.get('high_similarity_pairs'):
+        for pair in topic_data.get('high_similarity_pairs', [])[:5]:
+            similarity = pair['similarity']
+            if similarity > 0.95:
+                recommendations["consolidation_candidates"].append({
+                    "type": "semantic_merge",
+                    "priority": "CRITICAL",
+                    "page1": pair['page1'],
+                    "page2": pair['page2'],
+                    "similarity": f"{similarity * 100:.1f}%",
+                    "action": "Immediate consolidation required",
+                    "reason": "Near-duplicate content detected",
+                    "steps": [
+                        "1. Choose stronger page (check backlinks, traffic)",
+                        "2. Merge unique content elements",
+                        "3. 301 redirect duplicate page",
+                        "4. Update XML sitemap"
+                    ]
+                })
+            elif similarity > 0.85:
+                recommendations["content_optimization"].append({
+                    "type": "topic_differentiation",
+                    "priority": "HIGH",
+                    "pages": [pair['page1'], pair['page2']],
+                    "similarity": f"{similarity * 100:.1f}%",
+                    "action": "Differentiate topic focus",
+                    "suggestions": [
+                        "Target different audience segments",
+                        "Focus on different aspects of the topic",
+                        "Use topic clusters approach",
+                        "Create clear content hierarchy"
+                    ]
+                })
+    
+    # Generate quick wins
+    if keyword_data.get('top_issues'):
+        for pages, data in list(keyword_data.get('top_issues', {}).items())[:3]:
+            if data.get('total_clicks_affected', 0) > 50:
+                recommendations["quick_wins"].append({
+                    "action": f"Update internal links for '{data.get('shared_keywords', [''])[0]}'",
+                    "impact": "Immediate ranking signal consolidation",
+                    "time": "1-2 hours",
+                    "how": "Point all internal links to the stronger performing page"
+                })
+    
+    # Long-term strategy recommendations
+    total_issues = (
+        keyword_data.get('pages_with_cannibalization', 0) +
+        content_data.get('queries_with_overlap', 0) +
+        topic_data.get('pages_with_high_similarity', 0)
+    )
+    
+    if total_issues > 20:
+        recommendations["long_term_strategy"] = [
+            {
+                "strategy": "Implement Content Governance",
+                "priority": "CRITICAL",
+                "actions": [
+                    "Create keyword mapping document",
+                    "Establish content approval process",
+                    "Regular quarterly audits",
+                    "Train content team on cannibalization"
+                ]
+            },
+            {
+                "strategy": "Develop Topic Clusters",
+                "priority": "HIGH",
+                "actions": [
+                    "Identify main pillar topics",
+                    "Create comprehensive pillar pages",
+                    "Develop supporting cluster content",
+                    "Implement strategic internal linking"
+                ]
+            }
+        ]
+    
+    # Generate priority order
+    all_actions = []
+    for action in recommendations["immediate_actions"]:
+        all_actions.append({
+            "priority_score": 100 if action["priority"] == "CRITICAL" else 80,
+            "action": action["action"],
+            "type": action["type"],
+            "details": action
+        })
+    
+    for action in recommendations["consolidation_candidates"]:
+        all_actions.append({
+            "priority_score": 90,
+            "action": action["action"],
+            "type": action["type"],
+            "details": action
+        })
+    
+    # Sort by priority
+    all_actions.sort(key=lambda x: x["priority_score"], reverse=True)
+    recommendations["priority_order"] = all_actions[:10]
+    
+    # Use AI for enhanced recommendations if available
+    if ai_provider and ai_provider.client:
+        ai_insights = generate_ai_enhanced_recommendations(
+            keyword_data, content_data, topic_data, recommendations, ai_provider
+        )
+        recommendations["ai_insights"] = ai_insights
+    
+    return recommendations
+
+def generate_ai_enhanced_recommendations(keyword_data: Dict, content_data: Dict, 
+                                       topic_data: Dict, base_recommendations: Dict,
+                                       ai_provider: AIProvider) -> str:
+    """Generate AI-enhanced recommendations with specific examples"""
+    
+    # Prepare context for AI
+    top_keyword_issues = []
+    if keyword_data.get('top_issues'):
+        for pages, data in list(keyword_data.get('top_issues', {}).items())[:3]:
+            top_keyword_issues.append({
+                "pages": [data.get('page1_full', ''), data.get('page2_full', '')],
+                "overlap": data['overlap_percentage'],
+                "keywords": data.get('shared_keywords', [])[:5],
+                "clicks": data.get('total_clicks_affected', 0)
+            })
+    
+    prompt = f"""As an SEO expert, analyze this cannibalization data and provide SPECIFIC, ACTIONABLE recommendations:
+
+CRITICAL FINDINGS:
+- Keyword Cannibalization: {keyword_data.get('pages_with_cannibalization', 0)} pages affected
+- Content/SERP Overlap: {content_data.get('queries_with_overlap', 0)} queries competing
+- Topic Similarity: {topic_data.get('pages_with_high_similarity', 0)} near-duplicate pages
+
+TOP ISSUES REQUIRING IMMEDIATE ACTION:
+{json.dumps(top_keyword_issues, indent=2)}
+
+Based on SEO best practices for fixing cannibalization, provide:
+
+1. **IMMEDIATE ACTIONS** (Do this week):
+   - Which specific pages to merge (with URLs)
+   - Exactly how to implement 301 redirects
+   - Quick internal linking fixes
+
+2. **CONTENT CONSOLIDATION STRATEGY**:
+   - Step-by-step merging process
+   - How to preserve link equity
+   - Content migration checklist
+
+3. **DIFFERENTIATION TACTICS**:
+   - How to rewrite titles/meta descriptions
+   - Long-tail keyword opportunities
+   - Different search intent angles
+
+4. **EXPECTED RESULTS**:
+   - Traffic recovery timeline
+   - Ranking improvement expectations
+   - Risk mitigation steps
+
+5. **30-DAY IMPLEMENTATION PLAN**:
+   Week 1: [Specific tasks]
+   Week 2: [Specific tasks]
+   Week 3: [Specific tasks]
+   Week 4: [Monitoring & adjustment]
+
+Be specific with URLs and keywords. Focus on high-impact, practical solutions."""
+
+    try:
+        if ai_provider.provider == "OpenAI" and openai:
+            response = openai.ChatCompletion.create(
+                model=ai_provider.model,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=2000,
+                temperature=0.7
+            )
+            return response.choices[0].message.content
+            
+        elif ai_provider.provider == "Anthropic" and anthropic:
+            response = ai_provider.client.messages.create(
+                model=ai_provider.model,
+                max_tokens=2000,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            return response.content[0].text
+            
+        elif ai_provider.provider == "Google" and genai:
+            response = ai_provider.client.generate_content(prompt)
+            return response.text
+            
+    except Exception as e:
+        return f"Could not generate AI insights: {str(e)}"
+    
+    return ""
+
+def display_ai_recommendations(recommendations: Dict):
+    """Display AI recommendations in a structured, actionable format"""
+    
+    # Immediate Actions
+    if recommendations.get("immediate_actions"):
+        st.subheader("🚨 Immediate Actions Required")
+        st.markdown("*Complete these within the next 7 days for maximum impact*")
+        
+        for i, action in enumerate(recommendations["immediate_actions"], 1):
+            with st.expander(f"Action #{i}: {action['action']} ({action['priority']} Priority)", expanded=True):
+                st.error(f"**Reason:** {action['reason']}")
+                
+                if action.get('page1'):
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.write("**Page 1:**")
+                        st.code(action['page1'][:100] + "..." if len(action['page1']) > 100 else action['page1'])
+                    with col2:
+                        st.write("**Page 2:**")
+                        st.code(action.get('page2', '')[:100] + "..." if action.get('page2', '') and len(action.get('page2', '')) > 100 else action.get('page2', ''))
+                
+                if action.get('implementation'):
+                    st.write("**Implementation Steps:**")
+                    for step in action['implementation']:
+                        st.write(step)
+                
+                if action.get('expected_impact'):
+                    st.success(f"**Expected Impact:** {action['expected_impact']}")
+    
+    # Quick Wins
+    if recommendations.get("quick_wins"):
+        st.subheader("⚡ Quick Wins")
+        st.markdown("*Low-effort, high-impact changes you can make today*")
+        
+        cols = st.columns(len(recommendations["quick_wins"][:3]))
+        for i, (col, win) in enumerate(zip(cols, recommendations["quick_wins"][:3])):
+            with col:
+                st.info(f"**Quick Win #{i+1}**")
+                st.write(f"**Action:** {win['action']}")
+                st.write(f"**Time:** {win['time']}")
+                st.write(f"**Impact:** {win['impact']}")
+                if win.get('how'):
+                    st.write(f"**How:** {win['how']}")
+    
+    # Consolidation Candidates
+    if recommendations.get("consolidation_candidates"):
+        st.subheader("🔄 Pages to Consolidate")
+        st.markdown("*These pages are so similar they should be merged*")
+        
+        for candidate in recommendations["consolidation_candidates"]:
+            with st.expander(f"{candidate['action']} - {candidate['similarity']} similarity"):
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.write("**Page 1:**")
+                    st.code(candidate['page1'][:80] + "...")
+                with col2:
+                    st.write("**Page 2:**")
+                    st.code(candidate['page2'][:80] + "...")
+                
+                st.warning(f"**Reason:** {candidate['reason']}")
+                
+                if candidate.get('steps'):
+                    st.write("**Consolidation Steps:**")
+                    for step in candidate['steps']:
+                        st.write(step)
+    
+    # Content Optimization
+    if recommendations.get("content_optimization"):
+        st.subheader("✏️ Content Optimization Needed")
+        st.markdown("*Differentiate these pages to avoid competition*")
+        
+        for opt in recommendations["content_optimization"]:
+            with st.expander(f"{opt['action']} ({opt['priority']} Priority)"):
+                if opt.get('pages'):
+                    st.write("**Affected Pages:**")
+                    for page in opt['pages']:
+                        st.write(f"• {page[:100]}...")
+                
+                if opt.get('suggestions'):
+                    st.write("**Optimization Suggestions:**")
+                    for suggestion in opt['suggestions']:
+                        st.write(f"• {suggestion}")
+                
+                if opt.get('reason'):
+                    st.info(f"**Why:** {opt['reason']}")
+    
+    # Technical Fixes
+    if recommendations.get("technical_fixes"):
+        st.subheader("🔧 Technical Fixes")
+        st.markdown("*Backend optimizations to clarify page hierarchy*")
+        
+        for fix in recommendations["technical_fixes"]:
+            with st.expander(f"{fix['action']} ({fix['priority']} Priority)"):
+                st.write(f"**Issue:** {fix['reason']}")
+                st.write("**Affected Pages:**")
+                for page in fix['pages']:
+                    st.write(f"• {page[:100]}...")
+    
+    # Long-term Strategy
+    if recommendations.get("long_term_strategy"):
+        st.subheader("📅 Long-term Strategy")
+        st.markdown("*Prevent future cannibalization with these strategic changes*")
+        
+        for strategy in recommendations["long_term_strategy"]:
+            with st.expander(f"{strategy['strategy']} ({strategy['priority']} Priority)"):
+                st.write("**Action Items:**")
+                for action in strategy['actions']:
+                    st.write(f"• {action}")
+    
+    # AI Insights
+    if recommendations.get("ai_insights"):
+        st.subheader("🤖 AI-Powered Strategic Insights")
+        with st.expander("Detailed AI Analysis & Recommendations", expanded=True):
+            st.markdown(recommendations["ai_insights"])
+    
+    # Priority Timeline
+    st.subheader("📋 Implementation Timeline")
+    st.markdown("*Your prioritized action plan*")
+    
+    timeline_data = {
+        "Week 1": [],
+        "Week 2": [],
+        "Week 3": [],
+        "Week 4": []
+    }
+    
+    for i, action in enumerate(recommendations.get("priority_order", [])[:10]):
+        week = f"Week {min((i // 3) + 1, 4)}"
+        timeline_data[week].append(f"• {action['action']} ({action['type']})")
+    
+    cols = st.columns(4)
+    for i, (week, tasks) in enumerate(timeline_data.items()):
+        with cols[i]:
+            st.write(f"**{week}**")
+            for task in tasks:
+                st.write(task)
+            if not tasks:
+                st.write("• Monitor & adjust")
+    
+    # Download recommendations
+    if st.button("📥 Download Recommendations", use_container_width=True):
+        report_text = generate_recommendations_report(recommendations)
+        st.download_button(
+            label="Download Recommendations Report",
+            data=report_text,
+            file_name=f"cannibalization_recommendations_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
+            mime="text/markdown"
+        )
+
+def generate_recommendations_report(recommendations: Dict) -> str:
+    """Generate a downloadable recommendations report"""
+    
+    report = f"""# SEO Cannibalization Fix Recommendations
+Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+## Executive Summary
+This report provides actionable recommendations to fix SEO cannibalization issues identified on your website.
+
+"""
+    
+    # Add immediate actions
+    if recommendations.get("immediate_actions"):
+        report += "## Immediate Actions (Do This Week)\n\n"
+        for i, action in enumerate(recommendations["immediate_actions"], 1):
+            report += f"### Action {i}: {action['action']}\n"
+            report += f"**Priority:** {action['priority']}\n"
+            report += f"**Reason:** {action['reason']}\n\n"
+            if action.get('implementation'):
+                report += "**Steps:**\n"
+                for step in action['implementation']:
+                    report += f"{step}\n"
+            report += "\n---\n\n"
+    
+    # Add other sections
+    if recommendations.get("quick_wins"):
+        report += "## Quick Wins\n\n"
+        for win in recommendations["quick_wins"]:
+            report += f"- **{win['action']}** ({win['time']})\n"
+            report += f"  - Impact: {win['impact']}\n\n"
+    
+    # Add AI insights if available
+    if recommendations.get("ai_insights"):
+        report += "\n## AI Strategic Analysis\n\n"
+        report += recommendations["ai_insights"]
+    
+    return report
+
+# ============================================================================
 # MAIN APPLICATION
 # ============================================================================
 
 def main():
     st.title("🔍 SEO Cannibalization Analyzer")
-    st.markdown("Comprehensive analysis of keyword, content, and topic cannibalization with URL normalization")
+    st.markdown("Comprehensive analysis of keyword, content, and topic cannibalization with AI-powered recommendations")
     
     # Initialize session state for progress tracking
     if 'analysis_progress' not in st.session_state:
@@ -1137,8 +1624,9 @@ def main():
         )
     
     # Main content tabs
-    tab1, tab2, tab3, tab4 = st.tabs(["📊 Data Upload", "🔤 Keyword Analysis", 
-                                       "📑 Content Analysis", "🧠 Topic Analysis"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Data Upload", "🔤 Keyword Analysis", 
+                                             "📑 Content Analysis", "🧠 Topic Analysis", 
+                                             "🤖 AI Insights & Recommendations"])
     
     with tab1:
         st.header("Upload Your Data")
@@ -1469,6 +1957,92 @@ def main():
         else:
             st.info("📤 Please upload an embeddings file in the Data Upload tab")
     
+    with tab5:
+        st.header("🤖 AI-Powered Insights & Actionable Recommendations")
+        
+        # Check if any analysis has been run
+        has_keyword_results = 'keyword_results' in st.session_state
+        has_content_results = 'content_results' in st.session_state
+        has_topic_results = 'topic_results' in st.session_state
+        
+        if not any([has_keyword_results, has_content_results, has_topic_results]):
+            st.info("📊 Please run at least one analysis in the previous tabs to generate AI insights")
+        else:
+            # Display analysis summary
+            st.subheader("📈 Analysis Summary")
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                if has_keyword_results:
+                    kr = st.session_state['keyword_results']
+                    severity = kr.get('severity_info', {})
+                    st.metric(
+                        "Keyword Cannibalization",
+                        f"{severity.get('severity', 'N/A')}",
+                        f"{kr.get('pages_with_cannibalization', 0)} pages affected"
+                    )
+                else:
+                    st.metric("Keyword Cannibalization", "Not analyzed", "Run analysis")
+            
+            with col2:
+                if has_content_results:
+                    cr = st.session_state['content_results']
+                    severity = cr.get('severity_info', {})
+                    st.metric(
+                        "Content/SERP Overlap",
+                        f"{severity.get('severity', 'N/A')}",
+                        f"{cr.get('queries_with_overlap', 0)} queries affected"
+                    )
+                else:
+                    st.metric("Content/SERP Overlap", "Not analyzed", "Run analysis")
+            
+            with col3:
+                if has_topic_results:
+                    tr = st.session_state['topic_results']
+                    severity = tr.get('severity_info', {})
+                    st.metric(
+                        "Topic Similarity",
+                        f"{severity.get('severity', 'N/A')}",
+                        f"{tr.get('pages_with_high_similarity', 0)} pages affected"
+                    )
+                else:
+                    st.metric("Topic Similarity", "Not analyzed", "Run analysis")
+            
+            st.divider()
+            
+            # AI Provider Check
+            if not ai_provider or not ai_provider.client:
+                st.warning("⚠️ Please configure an AI provider in the sidebar to get detailed recommendations")
+                st.info("Without AI, you'll still see rule-based recommendations based on SEO best practices")
+            
+            # Generate insights button
+            if st.button("🎯 Generate Actionable Recommendations", type="primary", use_container_width=True):
+                with st.spinner("Analyzing your data and generating personalized recommendations..."):
+                    
+                    # Prepare data for analysis
+                    keyword_data = st.session_state.get('keyword_results', {})
+                    content_data = st.session_state.get('content_results', {})
+                    topic_data = st.session_state.get('topic_results', {})
+                    
+                    # Generate recommendations based on severity and data
+                    recommendations = generate_ai_recommendations(
+                        keyword_data, content_data, topic_data, ai_provider
+                    )
+                    
+                    # Store recommendations in session state
+                    st.session_state['ai_recommendations'] = recommendations
+                    
+                    # Display success message
+                    st.success("✅ Recommendations generated successfully!")
+                    
+                    # Display recommendations
+                    display_ai_recommendations(recommendations)
+            
+            # If recommendations already exist, display them
+            elif 'ai_recommendations' in st.session_state:
+                display_ai_recommendations(st.session_state['ai_recommendations'])
+    
     # Report Generation Section
     st.divider()
     
@@ -1484,11 +2058,15 @@ def main():
         with col2:
             if st.button("📋 Generate Comprehensive Report", type="primary", use_container_width=True):
                 with st.spinner("Generating comprehensive report with insights..."):
+                    # Include AI recommendations if available
+                    ai_recommendations = st.session_state.get('ai_recommendations', {})
+                    
                     report = generate_comprehensive_report(
                         st.session_state.get('keyword_results', {}),
                         st.session_state.get('content_results', {}),
                         st.session_state.get('topic_results', {}),
-                        ai_provider
+                        ai_provider,
+                        ai_recommendations
                     )
                     
                     st.markdown("### 📊 Complete Analysis Report")
